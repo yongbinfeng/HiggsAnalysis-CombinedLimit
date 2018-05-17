@@ -48,13 +48,13 @@ namespace ROOT {
    namespace Math {
 
 
-GSLMinimizerMod::GSLMinimizerMod( ROOT::Math::EGSLMinimizerModType type) :
+GSLMinimizerMod::GSLMinimizerMod( ROOT::Math::EGSLMinimizerType type) :
    BasicMinimizer()
 {
    // Constructor implementation : create GSLMultiMin wrapper object
    //std::cout << "create GSL Minimizer of type " << type << std::endl;
 
-   fGSLMultiMin = new GSLMultiMinimizerMod((ROOT::Math::EGSLMinimizerModType) type);
+   fGSLMultiMin = new GSLMultiMinimizerMod((ROOT::Math::EGSLMinimizerType) type);
 
    fLSTolerance = 0.1; // line search tolerance (use fixed)
    int niter = ROOT::Math::MinimizerOptions::DefaultMaxIterations();
@@ -69,7 +69,7 @@ GSLMinimizerMod::GSLMinimizerMod( const char *  type) :    BasicMinimizer()
    std::string algoname(type);
    std::transform(algoname.begin(), algoname.end(), algoname.begin(), (int(*)(int)) tolower );
 
-   ROOT::Math::EGSLMinimizerModType algo =   kVectorBFGS2; // default value
+   ROOT::Math::EGSLMinimizerType algo =   kVectorBFGS2; // default value
 
    if (algoname == "conjugatefr") algo = kConjugateFR;
    if (algoname == "conjugatepr") algo = kConjugatePR;

@@ -57,7 +57,7 @@ public:
    /**
       Default constructor
    */
-   GSLMultiMinimizerMod (ROOT::Math::EGSLMinimizerModType type)  :
+   GSLMultiMinimizerMod (ROOT::Math::EGSLMinimizerType type)  :
       fMinimizer(0),
       fType(0),
       fVec(0)

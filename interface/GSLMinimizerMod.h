@@ -29,6 +29,7 @@
 #define ROOT_Math_GSLMinimizerMod
 
 #include "Math/Minimizer.h"
+#include "Math/GSLMinimizer.h"
 
 
 #include "Math/IFunctionfwd.h"
@@ -53,13 +54,13 @@ namespace Math {
       enumeration specifying the types of GSL minimizers
       @ingroup MultiMin
    */
-   enum EGSLMinimizerModType {
-      kConjugateFR,
-      kConjugatePR,
-      kVectorBFGS,
-      kVectorBFGS2,
-      kSteepestDescent
-   };
+//    enum EGSLMinimizerModType {
+//       kConjugateFR,
+//       kConjugatePR,
+//       kVectorBFGS,
+//       kVectorBFGS2,
+//       kSteepestDescent
+//    };
 
 
    class GSLMultiMinimizerMod;
@@ -90,7 +91,7 @@ public:
    /**
       Default constructor
    */
-   GSLMinimizerMod (ROOT::Math::EGSLMinimizerModType type = ROOT::Math::kConjugateFR  );
+   GSLMinimizerMod (ROOT::Math::EGSLMinimizerType type = ROOT::Math::kConjugateFR  );
 
    /**
       Constructor with a string giving name of algorithm
