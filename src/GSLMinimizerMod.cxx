@@ -192,15 +192,20 @@ bool GSLMinimizerMod::Minimize() {
    bool minFound = false;
    bool iterFailed = false;
    do {
+      double fval0 = fGSLMultiMin->Minimum();
       status = fGSLMultiMin->Iterate();
-      if (status) {
+      if (status && status != GSL_ENOPROG) {
          iterFailed = true;
          break;
       }
-
-      status = fGSLMultiMin->TestGradient( Tolerance() );
-      if (status == GSL_SUCCESS) {
+      
+      double df = fGSLMultiMin->Minimum() - fval0;
+      printf("df = %5f, tolerance = %5f\n",df,Tolerance());
+      if (df > -Tolerance() || status == GSL_ENOPROG) {
          minFound = true;
+      }
+      else {
+         status = GSL_CONTINUE;
       }
 
       if (debugLevel >=2) {
