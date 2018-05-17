@@ -52,6 +52,7 @@
 #include "HiggsAnalysis/CombinedLimit/interface/CMSHistFunc.h"
 #include "HiggsAnalysis/CombinedLimit/interface/CMSHistErrorPropagator.h"
 #include "HiggsAnalysis/CombinedLimit/interface/CMSHistFuncWrapper.h"
+#include "HiggsAnalysis/CombinedLimit/interface/GSLMinimizerMod.h"
 
 #include "HiggsAnalysis/CombinedLimit/interface/RooNCSplineCore.h"
 #include "HiggsAnalysis/CombinedLimit/interface/RooNCSpline_1D_fast.h"

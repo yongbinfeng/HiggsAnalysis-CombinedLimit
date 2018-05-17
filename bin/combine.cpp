@@ -3,6 +3,7 @@
 #include <TSystem.h>
 #include <TFile.h>
 #include <TTree.h>
+#include <TPluginManager.h>
 #include <RooRandom.h>
 #include <iostream>
 #include <fstream>
@@ -34,6 +35,9 @@ int main(int argc, char **argv) {
   using namespace boost;
   namespace po = boost::program_options;
 
+  gPluginMgr->AddHandler("ROOT::Math::Minimizer", "GSLMultiMinMod", "ROOT::Math::GSLMinimizerMod",
+      "HiggsAnalysisCombinedLimit", "GSLMinimizerMod(const char *)");
+  
   string name;
   string datacard, dataset;
   float iMass;
