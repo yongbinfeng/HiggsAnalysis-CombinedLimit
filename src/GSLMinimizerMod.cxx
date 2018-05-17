@@ -203,6 +203,7 @@ bool GSLMinimizerMod::Minimize() {
       printf("df = %5f, tolerance = %5f\n",df,Tolerance());
       if (df > -Tolerance() || status == GSL_ENOPROG) {
          minFound = true;
+         status = 0;
       }
       else {
          status = GSL_CONTINUE;
