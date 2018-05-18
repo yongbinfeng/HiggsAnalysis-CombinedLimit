@@ -200,7 +200,7 @@ bool GSLMinimizerMod::Minimize() {
       }
       
       double df = fGSLMultiMin->Minimum() - fval0;
-      double tolerance = 0.01;
+      double tolerance = 0.001;
 //       printf("df = %5f, tolerance = %5f\n",df,tolerance);
       if (df > -tolerance || status == GSL_ENOPROG) {
          minFound = true;
