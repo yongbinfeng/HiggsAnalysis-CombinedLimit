@@ -40,6 +40,7 @@ std::map<std::string,std::vector<std::string> > const CascadeMinimizer::minimize
  {"Minuit"	 ,{"Migrad","Simplex","Combined","Scan"}}
 ,{"Minuit2" 	 ,{"Migrad","Simplex","Combined","Scan"}}
 ,{"GSLMultiMin"  ,{"ConjugateFR", "ConjugatePR", "BFGS", "BFGS2", "SteepestDescent"}}
+,{"GSLMultiMinMod"  ,{"ConjugateFR", "ConjugatePR", "BFGS", "BFGS2", "SteepestDescent"}}
 };
 
 CascadeMinimizer::CascadeMinimizer(RooAbsReal &nll, Mode mode, RooRealVar *poi) :
