@@ -42,33 +42,20 @@ if options.fileName.endswith(".gz"):
 else:
     file = open(options.fileName, "r")
 
-print(options)
-
 ## Parse text file 
 DC = parseCard(file, options)
-
-DC.print_structure()
 
 if options.dumpCard:
     DC.print_structure()
     exit()
 
-#nchan = len(DC.bins)
-
 nproc = len(DC.processes)
 nsyst = len(DC.systs)
 npoi = len(DC.signals)
 
-#dtype = 'float32'
 dtype = 'float64'
 
 MB = ShapeBuilder(DC, options)
-
-#data_obs = None
-#norm = None
-
-print(DC.processes)
-print(DC.systs[0])
 
 #determine number of bins for each channel
 nbinschan = {}
@@ -83,7 +70,7 @@ for chan in DC.bins:
       nbinstotal += nbins
       break
 
-#fill data and expected
+#fill data, expected yields, and kappas
 data_obs = np.empty([0],dtype=dtype)
 norm = np.empty([0,nproc],dtype=dtype)
 logkup = np.empty([0,nproc,nsyst],dtype=dtype)
@@ -176,262 +163,124 @@ for chan in DC.bins:
 logkavg = 0.5*(logkup+logkdown)
 logkhalfdiff = 0.5*(logkup-logkdown)
 
-    
-print("data_obs:")    
-print(data_obs)
-print("norm:")
-print(norm)
-print("kup")
-print(np.exp(logkup))
-#print(logkup)
-print("kdown")
-print(np.exp(logkdown))
-#print(logkdown)
-
+#list of signals preserving datacard order
 signals = []
 for proc in DC.processes:
   if DC.isSignal[proc]:
     signals.append(proc)
 
+#build matrix of signal strength effects
+#hard-coded for now as one signal strength multiplier
+#per signal process
 kr = np.zeros([nproc,npoi],dtype=dtype)
-#for ipoi,signal in enumerate(DC.signals):
 for ipoi,signal in enumerate(signals):
   iproc = DC.processes.index(signal)
   kr[iproc][ipoi] = 1.
   
-print('kr')
-print(kr)
-
+#data
 x = tf.placeholder(dtype, shape=[data_obs.shape[0]])
-rv = np.ones([npoi]).astype(dtype)
-#rv = np.zeros([npoi]).astype(dtype)
-#kr = 1.0*np.ones([nproc,npoi]).astype(dtype)
-#norm = 10*np.ones([nchan,nproc]).astype(dtype)
-#k = 1.05*np.ones([nchan,nproc,nsyst]).astype(dtype)
-thetav = np.zeros([nsyst]).astype(dtype)
-#val = 100*np.ones([nchan]).astype(dtype)
 
+#initial value for signal strenghts
+rv = np.ones([npoi]).astype(dtype)
+
+#initial value for nuisances
+thetav = np.zeros([nsyst]).astype(dtype)
+
+#combined initializer for all fit parameters
 rthetav = np.concatenate((rv,thetav),axis=0)
 
+#tf variable containing all fit parameters
 rtheta = tf.Variable(rthetav)
 
+#split back into signal strengths and nuisances
 r = rtheta[:npoi]
 theta = rtheta[npoi:]
 
-#r = tf.slice(rtheta,0,npoi)
-#theta = tf.slice(rtheta,npoi,nsyst)
-
-#r = tf.Variable(rv,name='r')
-#theta = tf.Variable(thetav,name='theta')
-
-
-
-#snorm = tf.reduce_prod(tf.pow(k,theta),axis=-1)
-#rkr = r*kr
-
+#matrices encoding effect of signal strengths
 rkr = tf.pow(r,kr)
-#rkr = tf.exp(r*kr)
 rnorm = tf.reduce_prod(rkr, axis=-1)
-#pnorm = rnorm*norm
 
+#interpolation for asymmetric log-normal
 twox = 2.*theta
 twox2 = twox*twox
 alpha =  0.125 * twox * (twox2 * (3*twox2 - 10.) + 15.)
 alpha = tf.clip_by_value(alpha,-1.,1.)
 logk = logkavg + alpha*logkhalfdiff
 
-#thetabig = theta*np.ones_like(logkup)
-
-print(logkup)
-print(logkdown)
-#print(logkint)
-#print(thetabig)
-
-#logk = tf.where(tf.greater(tf.abs(thetabig),0.5),logkint,tf.where(tf.greater(thetabig,0.),logkup,logkdown))
-#logk = tf.where(tf.greater(thetabig,0.),logkup,logkdown)
-#logk = logkup
-
+#matrix encoding effect of nuisance parameters
 snorm = tf.reduce_prod(tf.exp(logk*theta),axis=-1)
 
+#final expected yields per-bin including effect of signal
+#strengths and nuisance parmeters
 pnorm = snorm*rnorm*norm
-#pnorm = rnorm*norm
-
 n = tf.reduce_sum(pnorm,axis=-1)
-#n = tf.where(tf.equal(x,0.),1.,n)
+
+
 zdata = np.zeros([nbinstotal],dtype=dtype)
 odata = np.ones([nbinstotal],dtype=dtype)
-#logn = tf.where(tf.equal(x,zdata), zdata, tf.log(n))
 nsafe = tf.where(tf.equal(x,zdata), odata, n)
 logn = tf.log(nsafe)
 
+#final likelihood computation
+
+#poison term
+ln = tf.reduce_sum(-x*logn + n, axis=-1)
+
+#constraints
+lc = tf.reduce_sum(0.5*tf.square(theta))
+
+lbare = ln + lc
+
+#offset
+loffsetv = np.zeros([],dtype=dtype)
+loffset = tf.Variable(loffsetv,trainable=False)
+
+l = lbare + loffset
+
+
+#for computation of saturated likelihood for offset
 xsafe = tf.where(tf.equal(x,zdata), odata, x)
 logx = tf.log(xsafe)
 lnx = tf.reduce_sum(-x*logx + x, axis=-1)
 
-ln = tf.reduce_sum(-x*logn + n, axis=-1)
-#ln = tf.reduce_sum(-x*tf.log(n) + n, axis=-1)
-lc = tf.reduce_sum(0.5*tf.square(theta))
-
-loffsetv = np.zeros([],dtype=dtype)
-loffset = tf.Variable(loffsetv,trainable=False);
-
-
-
-lbare = ln + lc
-l = lbare + loffset
-#l = ln
-
-minvars = [r,theta]
-
-#chisq = 2.*l
 
 grads = tf.gradients(l,rtheta)
+
+#uncertainty computation
 hess = tf.hessians(l,rtheta)[0]
 invhess = tf.matrix_inverse(hess)
 sigmas = tf.sqrt(tf.diag_part(invhess))
 
-thetahess = hess[npoi:,npoi:]
-invthetahess = tf.matrix_inverse(thetahess)
-thetasigmas = tf.sqrt(tf.diag_part(invthetahess))
-
-#opt = tf.train.AdamOptimizer(0.1).minimize(l)
-opt = tf.contrib.opt.NadamOptimizer().minimize(l)
-
-#opt = tf.train.AdagradOptimizer(1e-3).minimize(l)
-
-
+#initialize tf session
 sess = tf.Session()
-
-
-
-
 sess.run(tf.global_variables_initializer())
 
 n_exp = sess.run(n)
+
+#random toy
 #data_obs = np.random.poisson(n_exp)
-data_obs = n_exp 
 
-#print('snorm:')
-#print(sess.run(snorm,{x:data_obs}))
-print('rkr:')
-print(sess.run(rkr,{x:data_obs}))
-print('rnorm:')
-print(sess.run(rnorm,{x:data_obs}))
-print('pnorm:')
-print(sess.run(pnorm,{x:data_obs}))
-print('snorm:')
-print(sess.run(snorm,{x:data_obs}))
-print('n:')
-print(sess.run(n,{x:data_obs}))
-print('sum n:')
-print(sess.run(tf.reduce_sum(n),{x:data_obs}))
-print('min n:')
-print(sess.run(tf.reduce_min(n),{x:data_obs}))
+#asimov toy
+#data_obs = n_exp 
 
-print('min x+n:')
-print(sess.run(tf.reduce_min(x+n),{x:data_obs}))
-
-#print('logk:')
-#print(sess.run(logk,{x:data_obs}))
-print('ln:')
-print(sess.run(ln,{x:data_obs}))
-print('lc:')
-print(sess.run(lc,{x:data_obs}))
-
-print('l:')
-print(sess.run(l,{x:data_obs}))
-
-print('logn:')
-print(sess.run(logn,{x:data_obs}))
-
-#print('gradsr:')
-#print(sess.run(tf.gradients(logn,r),{x:data_obs}))
-
-#print('gradstheta:')
-#print(sess.run(tf.gradients(logn,theta),{x:data_obs}))
-
-#print('grads:')
-#print(sess.run(grads,{x:data_obs}))
-
-#print('hessian:')
-#print(sess.run(hess,{x:data_obs}))
-
-
-#print('invhess:')
-#print(sess.run(invhess,{x:data_obs}))
-
-#print('sigmas:')
-#print(sess.run(sigmas,{x:data_obs}))
-
-sess.run(r.assign(1.1*r))
-
+#assign likelihood offset based on saturated likelihood
 sess.run(loffset.assign(-lnx), {x:data_obs})
 
-def stepfunc(x):
-  print(x)
+#scipy-based minimizer
+opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.,'ftol': 0., 'maxls' : 200, 'maxcor' : 100}, method='L-BFGS-B').minimize(sess, {x:data_obs}, fetches=[l])
 
-class SmallEnoughException(Exception):
-    pass
+#get fit values values
+rv = sess.run(r)
+thetav = sess.run(theta)
 
-iter = 0
-lold = 0.
-def lossfunc(x):
-  #print("
-  lcur = x
-  diff = lcur-lold
-  print([iter, lcur, lold, lcur-lold])
-  if iter>0 and lcur-lold < -1e-6:
-    raise SmallEnoughException()
-  lold = lcur
-  iter += 1
-  
-def lossprint(x):
-  print(x)
-
-#try:
-#opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.,'ftol': 1e-99, 'maxls' : 200, 'maxcor' : 1000}, method='L-BFGS-B').minimize(sess, {x:data_obs}, fetches=[l],loss_callback=lossprint)
-#except:
-  #print("Convergence")
-
-opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.,'ftol': 0., 'maxls' : 200, 'maxcor' : 100}, method='L-BFGS-B').minimize(sess, {x:data_obs}, fetches=[l],loss_callback=lossprint)
-
-#opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol': 0.}, method='BFGS').minimize(sess, {x:data_obs}, fetches=[l], loss_callback=lossprint)
-
-
-
-print("r")
-print(sess.run(r))
-print("theta")
-print(sess.run(theta))
-#print("sigmas")
-#print(sess.run(sigmas, {x:data_obs}))
-
+#compute uncertainties
 sigmasv = sess.run(sigmas, {x:data_obs})
 
 rsigmasv = sigmasv[:npoi]
 thetasigmasv = sigmasv[npoi:]
 
-for sig,sigma in zip(signals,rsigmasv):
-  print([sig,sigma])
+for sig,rval,sigma in zip(signals,rv,rsigmasv):
+  print('%s = %f +- %f' % (sig,rval,sigma))
   
-for syst,sigma in zip(DC.systs,thetasigmasv):
-  print([syst[0],sigma])
-  
-print("nuissance only:")
-thetasigmasv2 = sess.run(thetasigmas, {x:data_obs})
-for syst,sigma in zip(DC.systs,thetasigmasv2):
-  print([syst[0],sigma])
-
-
-#opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True}, method='BFGS').minimize(sess, {x:data_obs}, step_callback=stepfunc)
-
-
-#print(sess.run([r,theta,l],{x: data_obs}))
-
-
-#for i in range(10000):
-    #lo, _ = sess.run([l, opt],{x: data_obs})
-    #print(sess.run([r,theta,l],{x: data_obs}))
-
-    #print(sess.run([r,l],{x: data_obs}))
-    #print(sess.run([r,theta]))
+for syst,thetaval,sigma in zip(DC.systs,thetav,thetasigmasv):
+  print('%s = %f +- %f' % (syst[0], thetaval, sigma))
