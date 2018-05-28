@@ -139,6 +139,9 @@ bool FitDiagnostics::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, R
   if (!justFit_ && out_ != "none"){
 	if (currentToy_ < 1){
 		fitOut.reset(TFile::Open((out_+"/fitDiagnostics"+name_+".root").c_str(), "RECREATE")); 
+                RooArgSet *norms = new RooArgSet();
+                norms->setName("norm_prefit");
+                getNormalizationsSimple(mc_s->GetPdf(), *mc_s->GetObservables(), *norms);
 		createFitResultTrees(*mc_s,withSystematics);
 	}
   }
@@ -173,8 +176,8 @@ bool FitDiagnostics::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, R
           delete norms;
       }
       if (withSystematics)	{
-	  setFitResultTrees(mc_s->GetNuisanceParameters(),nuisanceParameters_);
-	  setFitResultTrees(mc_s->GetGlobalObservables(),globalObservables_);
+        //	  setFitResultTrees(mc_s->GetNuisanceParameters(),nuisanceParameters_);
+	//  setFitResultTrees(mc_s->GetGlobalObservables(),globalObservables_);
       }
       if (savePredictionsPerToy_){
 	   RooArgSet *norms = new RooArgSet();
@@ -224,7 +227,7 @@ bool FitDiagnostics::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, R
   // }
   if (t_prefit_) {
       t_prefit_->Fill();
-      resetFitResultTrees(withSystematics);
+      //resetFitResultTrees(withSystematics);
   }
  
   RooFitResult *res_b = 0, *res_s = 0;
@@ -264,8 +267,8 @@ bool FitDiagnostics::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, R
       if (fitOut.get()) {
 	 if (currentToy_< 1)	fitOut->WriteTObject(res_b,"fit_b");
 	 if (withSystematics)	{
-		setFitResultTrees(mc_s->GetNuisanceParameters(),nuisanceParameters_);
-		setFitResultTrees(mc_s->GetGlobalObservables(),globalObservables_);
+           //		setFitResultTrees(mc_s->GetNuisanceParameters(),nuisanceParameters_);
+           // setFitResultTrees(mc_s->GetGlobalObservables(),globalObservables_);
 	 }
 	 fitStatus_ = res_b->status();
       }
@@ -350,8 +353,8 @@ bool FitDiagnostics::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, R
 	 if (currentToy_<1) fitOut->WriteTObject(res_s, "fit_s");
 
 	 if (withSystematics)	{
-	   setFitResultTrees(mc_s->GetNuisanceParameters(),nuisanceParameters_);
-	   setFitResultTrees(mc_s->GetGlobalObservables(),globalObservables_);
+           //	   setFitResultTrees(mc_s->GetNuisanceParameters(),nuisanceParameters_);
+	   //setFitResultTrees(mc_s->GetGlobalObservables(),globalObservables_);
 	 }
 	 fitStatus_ = res_s->status();
          numbadnll_ = res_s->numInvalidNLL();
@@ -460,7 +463,7 @@ bool FitDiagnostics::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, R
         
         if (fitOut.get()) {	
 		fitOut->cd();
-		// marc t_fit_sb_->Write(); t_fit_b_->Write(); t_prefit_->Write();
+                t_fit_sb_->Write(); // t_fit_b_->Write(); t_prefit_->Write();
 		fitOut.release()->Close();
 	}
 
@@ -962,8 +965,8 @@ void FitDiagnostics::setNormsFitResultTrees(const RooArgSet *args, double * vals
 	 
          for (TObject *a = iter->Next(); a != 0; a = iter->Next()) { 
                  RooRealVar *rcv = dynamic_cast<RooRealVar *>(a);   
-		 // std::cout << "index " << count << ", Name " << rcv->GetName() << ", val " <<  rcv->getVal() << std::endl;
-		 //std::string name = rcv->GetName();
+                 std::cout << "index " << count << ", Name " << rcv->GetName() << ", val " <<  rcv->getVal() << std::endl;
+		 std::string name = rcv->GetName();
 		 vals[count]=rcv->getVal();
 		 count++;
          }
@@ -985,18 +988,6 @@ void FitDiagnostics::createFitResultTrees(const RooStats::ModelConfig &mc, bool 
     	 t_fit_b_->Branch("fit_status",&fitStatus_,"fit_status/Int_t");
    	 t_fit_sb_->Branch("fit_status",&fitStatus_,"fit_status/Int_t");
 
-	 t_fit_b_->Branch(poiName.c_str(),&mu_,Form("%s/Double_t",poiName.c_str()));
-	 t_fit_sb_->Branch(poiName.c_str(),&mu_,Form("%s/Double_t",poiName.c_str()));
-	 
-	 t_fit_b_->Branch(Form("%sErr",poiName.c_str()),&muErr_,Form("%sErr/Double_t",poiName.c_str()));
-	 t_fit_sb_->Branch(Form("%sErr",poiName.c_str()),&muErr_,Form("%sErr/Double_t",poiName.c_str()));
-
-	 t_fit_b_->Branch(Form("%sLoErr",poiName.c_str()),&muLoErr_,Form("%sLoErr/Double_t",poiName.c_str()));
-	 t_fit_sb_->Branch(Form("%sLoErr",poiName.c_str()),&muLoErr_,Form("%sLoErr/Double_t",poiName.c_str()));
-
-	 t_fit_b_->Branch(Form("%sHiErr",poiName.c_str()),&muHiErr_,Form("%sHiErr/Double_t",poiName.c_str()));
-	 t_fit_sb_->Branch(Form("%sHiErr",poiName.c_str()),&muHiErr_,Form("%sHiErr/Double_t",poiName.c_str()));
-
 	 t_fit_b_->Branch("numbadnll",&numbadnll_,"numbadnll/Int_t");
 	 t_fit_sb_->Branch("numbadnll",&numbadnll_,"numbadnll/Int_t");
 
@@ -1005,7 +996,6 @@ void FitDiagnostics::createFitResultTrees(const RooStats::ModelConfig &mc, bool 
 
 	 t_fit_sb_->Branch("nll_nll0",&nll_nll0_,"nll_nll0/Double_t");
 
-	 int count=0; 
          // fill the maps for the nuisances, and global observables
          RooArgSet *norms= new RooArgSet();
          //getNormalizationsSimple(mc.GetPdf(), *mc.GetObservables(), *norms);  <-- This is useless as the order is messed up !
@@ -1032,7 +1022,20 @@ void FitDiagnostics::createFitResultTrees(const RooStats::ModelConfig &mc, bool 
 
          processNormalizations_ = new double[norms->getSize()];
          processNormalizationsShapes_ = new double[totalBins];
+         
+	 int count=0; 
+         TIterator* iter_n(norms->createIterator());
+         for (TObject *n = iter_n->Next(); n != 0; n = iter_n->Next()) { 
 
+           std::string poiName = (dynamic_cast<RooRealVar *>(n))->GetName();
+
+           t_fit_b_->Branch(poiName.c_str(),&processNormalizations_[count],Form("%s/Double_t",poiName.c_str()));
+           t_fit_sb_->Branch(poiName.c_str(),&processNormalizations_[count],Form("%s/Double_t",poiName.c_str()));
+           count++;
+         }
+
+         
+         /*
 	 // If no systematic (-S 0), then don't make nuisance trees
 	 if (withSys){
           const RooArgSet *cons = mc.GetGlobalObservables();
@@ -1098,7 +1101,7 @@ void FitDiagnostics::createFitResultTrees(const RooStats::ModelConfig &mc, bool 
 	   }
 	 }
          delete norms;
-
+         */
 	 //std::cout << "Created Branches for toy diagnostics" <<std::endl;
          return;	
 }
