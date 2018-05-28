@@ -731,6 +731,7 @@ void Combine::run(TString hlfFile, const std::string &dataset, double &limit, do
   
   for (std::vector<std::pair<RooRealVar*,std::pair<float,float> > >::iterator it = Combine::trackedParametersMap_.begin(); it!=Combine::trackedParametersMap_.end();it++){
     const char * token = (it->first)->GetName();
+    std::cout << "tracking this parameter: " << std::string(token).c_str() << std::endl;
     addBranch((std::string("trackedParam_")+token).c_str(), &((it->second).first), (std::string("trackedParam_")+token+std::string("/F")).c_str()); 
     addBranch((std::string("trackedParamErr_")+token).c_str(), &((it->second).second), (std::string("trackedParamErr_")+token+std::string("/F")).c_str()); 
   }
