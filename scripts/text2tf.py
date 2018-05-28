@@ -71,6 +71,14 @@ for chan in DC.bins:
       break
 
 #fill data, expected yields, and kappas
+
+#n.b data and expected have shape [nbins]
+
+#norm has shape [nbins,nprocs] and keeps track of expected normalization
+
+#logkup/down have shape [nbins, nprocs, nsyst] and keep track of systematic variations
+#per-bin, per-process, per nuisance-parameter 
+
 data_obs = np.empty([0],dtype=dtype)
 norm = np.empty([0,nproc],dtype=dtype)
 logkup = np.empty([0,nproc,nsyst],dtype=dtype)
