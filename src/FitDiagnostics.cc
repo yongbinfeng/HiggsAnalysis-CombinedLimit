@@ -460,7 +460,7 @@ bool FitDiagnostics::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, R
         
         if (fitOut.get()) {	
 		fitOut->cd();
-		t_fit_sb_->Write(); t_fit_b_->Write(); t_prefit_->Write();
+		// marc t_fit_sb_->Write(); t_fit_b_->Write(); t_prefit_->Write();
 		fitOut.release()->Close();
 	}
 

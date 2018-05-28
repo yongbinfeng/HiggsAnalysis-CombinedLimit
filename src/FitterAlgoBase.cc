@@ -318,13 +318,14 @@ RooFitResult *FitterAlgoBase::doFit(RooAbsPdf &pdf, RooAbsData &data, const RooA
 	    }
             minim.minimizer().setPrintLevel(2);
             if (verbose>1) {tw.Reset(); tw.Start();}
-            if (minim.minos(RooArgSet(r))) {
-               if (verbose>1) {  
-	       	std::cout << "Run Minos in  "; tw.Print(); std::cout << std::endl;
-	       }
-               rf.setRange("err68", r.getVal() + r.getAsymErrorLo(), r.getVal() + r.getAsymErrorHi());
-               rf.setAsymError(r.getAsymErrorLo(), r.getAsymErrorHi());
-            }
+           // marc commenting the following does not run minos
+           // marc  if (minim.minos(RooArgSet(r))) {
+           // marc     if (verbose>1) {  
+	       // marc 	std::cout << "Run Minos in  "; tw.Print(); std::cout << std::endl;
+	       // marc }
+           // marc    rf.setRange("err68", r.getVal() + r.getAsymErrorLo(), r.getVal() + r.getAsymErrorHi());
+           // marc    rf.setAsymError(r.getAsymErrorLo(), r.getAsymErrorHi());
+           // marc }
        } else {
             r.setVal(r0); r.setConstant(true);
 
