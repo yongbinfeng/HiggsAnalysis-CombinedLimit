@@ -32,9 +32,10 @@ parser.add_option("--PO", "--physics-option", dest="physOpt", default=[],  type=
 parser.add_option("", "--dump-datacard", dest="dumpCard", default=False, action='store_true',  help="Print to screen the DataCard as a python config and exit")
 parser.add_option("-t","--toys", default=0, type=int, help="run a given number of toys, 0 fits the data (default), and -1 fits the asimov toy")
 parser.add_option("","--toysFrequentist", default=True, action='store_true', help="run frequentist-type toys by randomizing constraint minima")
-parser.add_option("","--bypassFrequentistFit", default=False, action='store_true', help="bypass fit to data when running frequentist toys to get toys based on prefit expectations")
+parser.add_option("","--bypassFrequentistFit", default=True, action='store_true', help="bypass fit to data when running frequentist toys to get toys based on prefit expectations")
 parser.add_option("","--bootstrapData", default=False, action='store_true', help="throw toys directly from observed data counts rather than expectation from templates")
 parser.add_option("","--tolerance", default=1e-5, type=float, help="convergence tolerance for minimizer")
+parser.add_option("","--expectSignal", default=1., type=float, help="rate multiplier for signal expectation (used for fit starting values and for toys)")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -196,7 +197,7 @@ for ipoi,signal in enumerate(signals):
   
 
 #initial value for signal strenghts
-rv = np.ones([npoi]).astype(dtype)
+rv = options.expectSignal*np.ones([npoi]).astype(dtype)
 
 #initial value for nuisances
 thetav = np.zeros([nsyst]).astype(dtype)
