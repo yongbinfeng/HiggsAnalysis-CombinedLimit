@@ -6,6 +6,7 @@ from optparse import OptionParser
 import tensorflow as tf
 import numpy as np
 np.random.seed(123456789)
+tf.set_random_seed(123456789)
 
 import math
 
@@ -22,6 +23,7 @@ from HiggsAnalysis.CombinedLimit.DatacardParser import *
 from HiggsAnalysis.CombinedLimit.ModelTools import *
 from HiggsAnalysis.CombinedLimit.ShapeTools import *
 from HiggsAnalysis.CombinedLimit.PhysicsModel import *
+from HiggsAnalysis.CombinedLimit.pytfoptimizer import *
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 addDatacardParserOptions(parser)
@@ -185,17 +187,23 @@ for ipoi,signal in enumerate(signals):
   iproc = DC.processes.index(signal)
   kr[iproc][ipoi] = 1.
   
-#data
-x = tf.placeholder(dtype, shape=[data_obs.shape[0]])
 
 #initial value for signal strenghts
 rv = np.ones([npoi]).astype(dtype)
+#rv = np.zeros([npoi]).astype(dtype)
 
 #initial value for nuisances
 thetav = np.zeros([nsyst]).astype(dtype)
 
 #combined initializer for all fit parameters
 rthetav = np.concatenate((rv,thetav),axis=0)
+
+
+#data
+#nobs = tf.placeholder(dtype, shape=data_obs.shape)
+nobs = tf.Variable(data_obs, trainable=False)
+theta0 = tf.Variable(np.zeros_like(thetav), trainable=False)
+
 
 #tf variable containing all fit parameters
 rtheta = tf.Variable(rthetav)
@@ -206,6 +214,7 @@ theta = rtheta[npoi:]
 
 #matrices encoding effect of signal strengths
 rkr = tf.pow(r,kr)
+#rkr = tf.exp(r*kr)
 rnorm = tf.reduce_prod(rkr, axis=-1)
 
 #interpolation for asymmetric log-normal
@@ -221,41 +230,31 @@ snorm = tf.reduce_prod(tf.exp(logk*theta),axis=-1)
 #final expected yields per-bin including effect of signal
 #strengths and nuisance parmeters
 pnorm = snorm*rnorm*norm
-n = tf.reduce_sum(pnorm,axis=-1)
+pnorm = tf.maximum(pnorm,tf.zeros_like(pnorm))
+nexp = tf.reduce_sum(pnorm,axis=-1)
+nexp = tf.identity(nexp,name='nexp')
 
-
-zdata = np.zeros([nbinstotal],dtype=dtype)
-odata = np.ones([nbinstotal],dtype=dtype)
-nsafe = tf.where(tf.equal(x,zdata), odata, n)
-logn = tf.log(nsafe)
+nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
+lognexp = tf.log(nexpsafe)
 
 #final likelihood computation
 
 #poison term
-ln = tf.reduce_sum(-x*logn + n, axis=-1)
+ln = tf.reduce_sum(-nobs*lognexp + nexp, axis=-1)
 
 #constraints
-lc = tf.reduce_sum(0.5*tf.square(theta))
+lc = tf.reduce_sum(0.5*tf.square(theta - theta0))
 
-lbare = ln + lc
-
-#offset
-loffsetv = np.zeros([],dtype=dtype)
-loffset = tf.Variable(loffsetv,trainable=False)
-
-l = lbare + loffset
-
-
-#for computation of saturated likelihood for offset
-xsafe = tf.where(tf.equal(x,zdata), odata, x)
-logx = tf.log(xsafe)
-lnx = tf.reduce_sum(-x*logx + x, axis=-1)
-
+l = ln + lc
+l = tf.identity(l,name="loss")
 
 grads = tf.gradients(l,rtheta)
+grads = tf.identity(grads,"loss_grads")
 
 #uncertainty computation
 hess = tf.hessians(l,rtheta)[0]
+hess = tf.identity(hess,name="loss_hessian")
+
 invhess = tf.matrix_inverse(hess)
 sigmas = tf.sqrt(tf.diag_part(invhess))
 
@@ -263,26 +262,37 @@ sigmas = tf.sqrt(tf.diag_part(invhess))
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
-n_exp = sess.run(n)
+#n_exp = sess.run(nexp)
 
 #random toy
 #data_obs = np.random.poisson(n_exp)
+sess.run(nobs.assign(tf.random_poisson(nexp,shape=[],dtype=dtype)))
+sess.run(theta0.assign(theta + tf.random_normal(shape=thetav.shape,dtype=dtype)))
 
 #asimov toy
 #data_obs = n_exp 
+#sess.run(nobs.assign(nexp))
 
-#assign likelihood offset based on saturated likelihood
-sess.run(loffset.assign(-lnx), {x:data_obs})
+#sess.run(rtheta.assign(1.1*rtheta))
+#sess.run(rtheta.assign(1.+rtheta))
 
+def losscallback(x):
+  print(x)
+
+
+print("Running scipy optimizer:")
 #scipy-based minimizer
-opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.,'ftol': 0., 'maxls' : 200, 'maxcor' : 100}, method='L-BFGS-B').minimize(sess, {x:data_obs}, fetches=[l])
+#opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.,'ftol': 0., 'maxls' : 200, 'maxcor' : 100}, method='L-BFGS-B').minimize(sess, fetches=[l])
+#opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.}, method='BFGS').minimize(sess, fetches=[l],loss_callback=losscallback)
+opts = FastpyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.}).minimize(sess, fetches=[l],loss_callback=losscallback)
+#opts = FastpyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.}).minimize(sess, fetches=[l])
 
 #get fit values values
 rv = sess.run(r)
 thetav = sess.run(theta)
 
 #compute uncertainties
-sigmasv = sess.run(sigmas, {x:data_obs})
+sigmasv = sess.run(sigmas)
 
 rsigmasv = sigmasv[:npoi]
 thetasigmasv = sigmasv[npoi:]
