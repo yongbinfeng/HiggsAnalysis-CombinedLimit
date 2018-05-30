@@ -23,7 +23,7 @@ from HiggsAnalysis.CombinedLimit.DatacardParser import *
 from HiggsAnalysis.CombinedLimit.ModelTools import *
 from HiggsAnalysis.CombinedLimit.ShapeTools import *
 from HiggsAnalysis.CombinedLimit.PhysicsModel import *
-from HiggsAnalysis.CombinedLimit.pytfoptimizer import *
+from HiggsAnalysis.CombinedLimit.bfgscustom import minimize_bfgs_custom
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 addDatacardParserOptions(parser)
@@ -262,30 +262,20 @@ sigmas = tf.sqrt(tf.diag_part(invhess))
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
-#n_exp = sess.run(nexp)
-
 #random toy
-#data_obs = np.random.poisson(n_exp)
 sess.run(nobs.assign(tf.random_poisson(nexp,shape=[],dtype=dtype)))
 sess.run(theta0.assign(theta + tf.random_normal(shape=thetav.shape,dtype=dtype)))
 
 #asimov toy
-#data_obs = n_exp 
 #sess.run(nobs.assign(nexp))
 
 #sess.run(rtheta.assign(1.1*rtheta))
 #sess.run(rtheta.assign(1.+rtheta))
 
-def losscallback(x):
-  print(x)
 
-
-print("Running scipy optimizer:")
+print("Running minimizer:")
 #scipy-based minimizer
-#opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.,'ftol': 0., 'maxls' : 200, 'maxcor' : 100}, method='L-BFGS-B').minimize(sess, fetches=[l])
-#opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.}, method='BFGS').minimize(sess, fetches=[l],loss_callback=losscallback)
-opts = FastpyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.}).minimize(sess, fetches=[l],loss_callback=losscallback)
-#opts = FastpyOptimizerInterface(l, options={'disp': True, 'gtol' : 0.}).minimize(sess, fetches=[l])
+opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': 1e-5}, method=minimize_bfgs_custom).minimize(sess)
 
 #get fit values values
 rv = sess.run(r)
