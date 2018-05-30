@@ -30,6 +30,11 @@ addDatacardParserOptions(parser)
 parser.add_option("-P", "--physics-model", dest="physModel", default="HiggsAnalysis.CombinedLimit.PhysicsModel:defaultModel",  type="string", help="Physics model to use. It should be in the form (module name):(object name)")
 parser.add_option("--PO", "--physics-option", dest="physOpt", default=[],  type="string", action="append", help="Pass a given option to the physics model (can specify multiple times)")
 parser.add_option("", "--dump-datacard", dest="dumpCard", default=False, action='store_true',  help="Print to screen the DataCard as a python config and exit")
+parser.add_option("-t","--toys", default=0, type=int, help="run a given number of toys, 0 fits the data (default), and -1 fits the asimov toy")
+parser.add_option("","--toysFrequentist", default=True, action='store_true', help="run frequentist-type toys by randomizing constraint minima")
+parser.add_option("","--bypassFrequentistFit", default=False, action='store_true', help="bypass fit to data when running frequentist toys to get toys based on prefit expectations")
+parser.add_option("","--bootstrapData", default=False, action='store_true', help="throw toys directly from observed data counts rather than expectation from templates")
+parser.add_option("","--tolerance", default=1e-5, type=float, help="convergence tolerance for minimizer")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -50,6 +55,8 @@ DC = parseCard(file, options)
 if options.dumpCard:
     DC.print_structure()
     exit()
+
+print(options)
 
 nproc = len(DC.processes)
 nsyst = len(DC.systs)
@@ -190,7 +197,6 @@ for ipoi,signal in enumerate(signals):
 
 #initial value for signal strenghts
 rv = np.ones([npoi]).astype(dtype)
-#rv = np.zeros([npoi]).astype(dtype)
 
 #initial value for nuisances
 thetav = np.zeros([nsyst]).astype(dtype)
@@ -214,7 +220,6 @@ theta = rtheta[npoi:]
 
 #matrices encoding effect of signal strengths
 rkr = tf.pow(r,kr)
-#rkr = tf.exp(r*kr)
 rnorm = tf.reduce_prod(rkr, axis=-1)
 
 #interpolation for asymmetric log-normal
@@ -262,33 +267,53 @@ sigmas = tf.sqrt(tf.diag_part(invhess))
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
-#random toy
-sess.run(nobs.assign(tf.random_poisson(nexp,shape=[],dtype=dtype)))
-sess.run(theta0.assign(theta + tf.random_normal(shape=thetav.shape,dtype=dtype)))
-
-#asimov toy
-#sess.run(nobs.assign(nexp))
-
-#sess.run(rtheta.assign(1.1*rtheta))
-#sess.run(rtheta.assign(1.+rtheta))
-
-
-print("Running minimizer:")
-#scipy-based minimizer
-opts = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': 1e-5}, method=minimize_bfgs_custom).minimize(sess)
-
-#get fit values values
-rv = sess.run(r)
-thetav = sess.run(theta)
-
-#compute uncertainties
-sigmasv = sess.run(sigmas)
-
-rsigmasv = sigmasv[:npoi]
-thetasigmasv = sigmasv[npoi:]
-
-for sig,rval,sigma in zip(signals,rv,rsigmasv):
-  print('%s = %f +- %f' % (sig,rval,sigma))
+if options.toys == -1:
+  #asimov toy
+  sess.run(nobs.assign(nexp))
   
-for syst,thetaval,sigma in zip(DC.systs,thetav,thetasigmasv):
-  print('%s = %f +- %f' % (syst[0], thetaval, sigma))
+if options.toys <= 0:
+  #run the fit
+  tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom).minimize(sess)
+  
+  #get fit values values
+  rv = sess.run(r)
+  thetav = sess.run(theta)
+
+  #compute uncertainties
+  sigmasv = sess.run(sigmas)
+
+  rsigmasv = sigmasv[:npoi]
+  thetasigmasv = sigmasv[npoi:]
+
+  for sig,rval,sigma in zip(signals,rv,rsigmasv):
+    print('%s = %f +- %f' % (sig,rval,sigma))
+    
+  for syst,thetaval,sigma in zip(DC.systs,thetav,thetasigmasv):
+    print('%s = %f +- %f' % (syst[0], thetaval, sigma))
+  
+elif options.toys > 0:
+  #random toys
+  if options.toysFrequentist and not options.bypassFrequentistFit:
+        tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom).minimize(sess)
+        rthetav = sess.run(thetav)
+  
+  for itoy in range(options.toys):
+    sess.run(rtheta.assign(rthetav))
+    sess.run(nobs.assign(data_obs))
+    if options.toysFrequentist:
+      #randomize nuisance constraint minima
+      sess.run(theta0.assign(theta + tf.random_normal(shape=thetav.shape,dtype=dtype)))
+    else:
+      #randomize actual values (TODO)
+      pass
+    
+    if options.bootstrapData:
+      #randomize from observed data
+      sess.run(nobs.assign(tf.random_poisson(nobs,shape=[],dtype=dtype)))
+    else:
+      #randomize from expectation
+      sess.run(nobs.assign(tf.random_poisson(nexp,shape=[],dtype=dtype)))
+    
+    tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom).minimize(sess)
+
+
