@@ -188,4 +188,5 @@ def minimize_bfgs_custom(fun, x0, args=(), jac=None, hess = None, callback=None,
                             nit=k)
     if retall:
         result['allvecs'] = allvecs
+        
     return result

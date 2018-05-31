@@ -5,8 +5,6 @@ from optparse import OptionParser
 
 import tensorflow as tf
 import numpy as np
-np.random.seed(123456789)
-tf.set_random_seed(123456789)
 
 import math
 
@@ -18,6 +16,8 @@ import ROOT
 ROOT.gROOT.SetBatch(True)
 ROOT.PyConfig.IgnoreCommandLineOptions = True
 argv.remove( '-b-' )
+
+from array import array
 
 from HiggsAnalysis.CombinedLimit.DatacardParser import *
 from HiggsAnalysis.CombinedLimit.ModelTools import *
@@ -36,11 +36,16 @@ parser.add_option("","--bypassFrequentistFit", default=True, action='store_true'
 parser.add_option("","--bootstrapData", default=False, action='store_true', help="throw toys directly from observed data counts rather than expectation from templates")
 parser.add_option("","--tolerance", default=1e-5, type=float, help="convergence tolerance for minimizer")
 parser.add_option("","--expectSignal", default=1., type=float, help="rate multiplier for signal expectation (used for fit starting values and for toys)")
+parser.add_option("","--seed", default=123456789, type=int, help="random seed for toys")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
     parser.print_usage()
     exit(1)
+    
+seed = options.seed
+np.random.seed(seed)
+tf.set_random_seed(seed)
 
 options.fileName = args[0]
 if options.fileName.endswith(".gz"):
@@ -257,6 +262,8 @@ l = tf.identity(l,name="loss")
 grads = tf.gradients(l,rtheta)
 grads = tf.identity(grads,"loss_grads")
 
+grad = grads[0]
+
 #uncertainty computation
 hess = tf.hessians(l,rtheta)[0]
 hess = tf.identity(hess,name="loss_hessian")
@@ -264,57 +271,133 @@ hess = tf.identity(hess,name="loss_hessian")
 invhess = tf.matrix_inverse(hess)
 sigmas = tf.sqrt(tf.diag_part(invhess))
 
+#initialize output tree
+f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
+tree = ROOT.TTree("fitresults", "fitresults")
+
+tseed = array('i', [seed])
+tree.Branch('seed',tseed,'seed/I')
+
+titoy = array('i',[0])
+tree.Branch('itoy',titoy,'itoy/I')
+
+terrstatus = array('i',[0])
+tree.Branch('errstatus',terrstatus,'errstatus/I')
+
+tedmval = array('f',[0])
+tree.Branch('edmval',tedmval,'edmval/F')
+
+tsigvals = []
+tsigerrs = []
+for sig in signals:
+  tsigval = array('f', [0.])
+  tsigerr = array('f', [0.])
+  tsigvals.append(tsigval)
+  tsigerrs.append(tsigerr)
+  tree.Branch(sig, tsigval, '%s/F' % sig)
+  tree.Branch('%s_err' % sig, tsigerr, '%s_err/F' % sig)
+
+tthetavals = []
+ttheta0vals = []
+tthetaerrs = []
+for syst in DC.systs:
+  systname = syst[0]
+  tthetaval = array('f', [0.])
+  ttheta0val = array('f', [0.])
+  tthetaerr = array('f', [0.])
+  tthetavals.append(tthetaval)
+  ttheta0vals.append(ttheta0val)
+  tthetaerrs.append(tthetaerr)
+  tree.Branch(systname, tthetaval, '%s/F' % systname)
+  tree.Branch('%s_In' % systname, ttheta0val, '%s_In/F' % systname)
+  tree.Branch('%s_err' % systname, tthetaerr, '%s_err/F' % systname)
+
 #initialize tf session
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
-if options.toys == -1:
-  #asimov toy
-  sess.run(nobs.assign(nexp))
-  
-if options.toys <= 0:
-  #run the fit
-  tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom).minimize(sess)
-  
-  #get fit values values
-  rv = sess.run(r)
-  thetav = sess.run(theta)
+ntoys = options.toys
+if ntoys <= 0:
+  ntoys = 1
 
-  #compute uncertainties
-  sigmasv = sess.run(sigmas)
+#prefit to data if needed
+if options.toys>0 and options.toysFrequentist and not options.bypassFrequentistFit:
+      tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom).minimize(sess)
+      rthetav = sess.run(thetav)
 
-  rsigmasv = sigmasv[:npoi]
-  thetasigmasv = sigmasv[npoi:]
-
-  for sig,rval,sigma in zip(signals,rv,rsigmasv):
-    print('%s = %f +- %f' % (sig,rval,sigma))
-    
-  for syst,thetaval,sigma in zip(DC.systs,thetav,thetasigmasv):
-    print('%s = %f +- %f' % (syst[0], thetaval, sigma))
+for itoy in range(ntoys):
+  titoy[0] = itoy
   
-elif options.toys > 0:
-  #random toys
-  if options.toysFrequentist and not options.bypassFrequentistFit:
-        tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom).minimize(sess)
-        rthetav = sess.run(thetav)
-  
-  for itoy in range(options.toys):
-    sess.run(rtheta.assign(rthetav))
+  sess.run(rtheta.assign(rthetav))
+  if options.toys < 0:
+    print("Running fit to asimov toy")
+    sess.run(nobs.assign(nexp))
+  elif options.toys == 0:
+    print("Running fit to observed data")
     sess.run(nobs.assign(data_obs))
+  else:
+    print("Running toy %i" % itoy)
+    if options.bootstrapData:
+      #randomize from observed data
+      sess.run(nobs.assign(tf.random_poisson(nobs,shape=[],dtype=dtype)))
+    else:
+      #randomize from expectation
+      sess.run(nobs.assign(tf.random_poisson(nexp,shape=[],dtype=dtype)))  
+  
     if options.toysFrequentist:
       #randomize nuisance constraint minima
       sess.run(theta0.assign(theta + tf.random_normal(shape=thetav.shape,dtype=dtype)))
     else:
       #randomize actual values (TODO)
       pass
-    
-    if options.bootstrapData:
-      #randomize from observed data
-      sess.run(nobs.assign(tf.random_poisson(nobs,shape=[],dtype=dtype)))
-    else:
-      #randomize from expectation
-      sess.run(nobs.assign(tf.random_poisson(nexp,shape=[],dtype=dtype)))
-    
-    tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom).minimize(sess)
+  
+  minimizer = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom)
+  ret = minimizer.minimize(sess)
 
+  #get fit results
+  xval, gradval, hessval = sess.run([rtheta,grad,hess])
+  
+  #compute uncertainties and diagnostics  
+  try:
+    invhess = np.linalg.inv(hessval)
+    sigmasv = np.sqrt(np.diag(invhess))
+    edmval = 0.5*np.matmul(np.matmul(np.transpose(gradval),invhess),gradval)
+    errstatus = 0
+    if np.any(np.isnan(sigmasv)):
+      errstatus = 1
+  except np.linalg.LinAlgError:
+    sigmasv = -99.*np.ones_like(xval)
+    edmval = -99.
+    errstatus = 2
+    
+  print("errstatus = %i, edmval = %e" % (errstatus,edmval))
+  
+  terrstatus[0] = errstatus
+  tedmval[0] = edmval
+  
+  #get fit values
+  sigvals = xval[:npoi]
+  thetavals = xval[npoi:]
 
+  rsigmasv = sigmasv[:npoi]
+  thetasigmasv = sigmasv[npoi:]
+  
+  theta0vals = sess.run(theta0)
+
+  for sig,sigval,sigma,tsigval,tsigerr in zip(signals,sigvals,rsigmasv,tsigvals,tsigerrs):
+    tsigval[0] = sigval
+    tsigerr[0] = sigma
+    if itoy==0:
+      print('%s = %f +- %f' % (sig,sigval,sigma))
+
+  for syst,thetaval,theta0val,sigma,tthetaval,ttheta0val,tthetaerr in zip(DC.systs,thetavals,theta0vals,thetasigmasv,tthetavals,ttheta0vals,tthetaerrs):
+    tthetaval[0] = thetaval
+    ttheta0val[0] = theta0val
+    tthetaerr[0] = sigma
+    if itoy==0:
+      print('%s = %f +- %f' % (syst[0], thetaval, sigma))
+    
+  tree.Fill()
+
+f.Write()
+f.Close()
