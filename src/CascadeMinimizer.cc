@@ -35,6 +35,7 @@ std::string CascadeMinimizer::defaultMinimizerType_="Minuit2"; // default to min
 std::string CascadeMinimizer::defaultMinimizerAlgo_=ROOT::Math::MinimizerOptions::DefaultMinimizerAlgo();
 double CascadeMinimizer::defaultMinimizerTolerance_=1e-1;  
 int  CascadeMinimizer::strategy_=1; 
+int CascadeMinimizer::fStatus_=-999;
 
 std::map<std::string,std::vector<std::string> > const CascadeMinimizer::minimizerAlgoMap_{
  {"Minuit"	 ,{"Migrad","Simplex","Combined","Scan"}}
@@ -172,6 +173,7 @@ bool CascadeMinimizer::improveOnce(int verbose, bool noHesse)
             minimizer_->setPrintLevel(verbose-1); 
     	    if (verbose+2>0 ) Logger::instance().log(std::string(Form("CascadeMinimizer.cc: %d -- Hesse finished with status=%d",__LINE__,status)),Logger::kLogLevelDebug,__func__);
         }
+        fStatus_ = status;
         if (simnll) simnll->clearZeroPoint();
         outcome = (status == 0 || status == 1);
 	if (status==1) std::cerr << "[WARNING] Minimisation finished with status 1 (covariance forced positive definite), this could indicate a problem with the minimim!" << std::endl;

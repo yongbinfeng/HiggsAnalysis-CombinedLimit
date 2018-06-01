@@ -164,12 +164,13 @@ bool MultiDimFit::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooS
     if (nConstPoi>0) std::cout << "Following POIs have been set constant (use --floatOtherPOIs to let them float): " << setConstPOI << std::endl;
  
     // start with a best fit
+    int status=-999;
     const RooCmdArg &constrainCmdArg = withSystematics  ? RooFit::Constrain(*mc_s->GetNuisanceParameters()) : RooCmdArg();
     std::auto_ptr<RooFitResult> res;
     if (verbose <= 3) RooAbsReal::setEvalErrorLoggingMode(RooAbsReal::CountErrors);
     bool doHesse = (algo_ == Singles || algo_ == Impact) || (saveFitResult_) ;
     if ( !skipInitialFit_){
-        res.reset(doFit(pdf, data, (doHesse ? poiList_ : RooArgList()), constrainCmdArg, false, 1, true, false));
+      res.reset(doFit(pdf, data, (doHesse ? poiList_ : RooArgList()), constrainCmdArg, status, false, 1, true, false));
         if (!res.get()) {
             std::cout << "\n " <<std::endl;
             std::cout << "\n ---------------------------" <<std::endl;
@@ -213,7 +214,7 @@ bool MultiDimFit::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooS
 		specifiedCatVals_[j]=specifiedCat_[j]->getIndex();
 	}
         covQual_ = res->covQual();
-        fitStatus_ = res->status();
+        fitStatus_ = status;
 	Combine::commitPoint(/*expected=*/false, /*quantile=*/-1.); // Combine will not commit a point anymore at -1 so can do it here 
 	//}
     }
