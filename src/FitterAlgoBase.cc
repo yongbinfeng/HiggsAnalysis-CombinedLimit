@@ -207,6 +207,11 @@ RooFitResult *FitterAlgoBase::doFit(RooAbsPdf &pdf, RooAbsData &data, RooRealVar
 }
 
 RooFitResult *FitterAlgoBase::doFit(RooAbsPdf &pdf, RooAbsData &data, const RooArgList &rs, const RooCmdArg &constrain, bool doHesse, int ndim, bool reuseNLL, bool saveFitResult) {
+  int status = 0;
+  return doFit(pdf, data, rs, constrain, status, doHesse, ndim, reuseNLL, saveFitResult);
+}
+
+RooFitResult *FitterAlgoBase::doFit(RooAbsPdf &pdf, RooAbsData &data, const RooArgList &rs, const RooCmdArg &constrain, int &status, bool doHesse, int ndim, bool reuseNLL, bool saveFitResult) {
     RooFitResult *ret = 0;
     if (reuseNLL && nll.get() != 0 && !forceRecreateNLL_) {
         ((cacheutils::CachingSimNLL&)(*nll)).setData(data); // reuse nll but swap out the data
@@ -238,6 +243,8 @@ RooFitResult *FitterAlgoBase::doFit(RooAbsPdf &pdf, RooAbsData &data, const RooA
     sentry.clear();
     ret = (saveFitResult || rs.getSize() ? minim.save() : new RooFitResult("dummy","success"));
     if (verbose > 1 && ret != 0 && (saveFitResult || rs.getSize())) { ret->Print("V");  }
+
+    status = minim.status();
 
     std::auto_ptr<RooArgSet> allpars(pdf.getParameters(data));
     RooArgSet* bestFitPars = (RooArgSet*)allpars->snapshot() ;
@@ -362,7 +369,7 @@ RooFitResult *FitterAlgoBase::doFit(RooAbsPdf &pdf, RooAbsData &data, const RooA
             }
 
             r.setVal(r0); r.setConstant(false);
-        }
+       }
     }
 
     *allpars = *bestFitPars;

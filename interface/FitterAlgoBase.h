@@ -60,6 +60,7 @@ protected:
   /// If ndim > 1, errors on each parameter are from a n-dim chisquare, as for a joint estimation of N parameters 
   RooFitResult *doFit(RooAbsPdf &pdf, RooAbsData &data, RooRealVar &r,  const RooCmdArg &constrain, bool doHesse=true, int ndim=1,bool reuseNLL=false, bool saveFitResult=true) ;
   RooFitResult *doFit(RooAbsPdf &pdf, RooAbsData &data, const RooArgList &rs, const RooCmdArg &constrain, bool doHesse=true, int ndim=1,bool reuseNLL=false, bool saveFitResult=true) ;
+  RooFitResult *doFit(RooAbsPdf &pdf, RooAbsData &data, const RooArgList &rs, const RooCmdArg &constrain, int &status, bool doHesse=true, int ndim=1,bool reuseNLL=false, bool saveFitResult=true) ;
   double findCrossing(CascadeMinimizer &minim, RooAbsReal &nll, RooRealVar &r, double level, double rStart, double rBound) ;
   double findCrossingNew(CascadeMinimizer &minim, RooAbsReal &nll, RooRealVar &r, double level, double rStart, double rBound) ;
 

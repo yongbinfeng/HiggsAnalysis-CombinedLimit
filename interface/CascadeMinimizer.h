@@ -38,6 +38,7 @@ class CascadeMinimizer {
         void setAutoMax(const RooArgSet *pois) ; 
 	double tolerance() {return defaultMinimizerTolerance_;};
 	std::string algo() {return defaultMinimizerAlgo_;};
+        int status() {return fStatus_;};
     private:
         RooAbsReal & nll_;
         std::auto_ptr<RooMinimizer> minimizer_;
@@ -97,6 +98,7 @@ class CascadeMinimizer {
 	static std::string defaultMinimizerAlgo_;
 	static double 	   defaultMinimizerTolerance_;
 	//static int 	   defaultMinimizerStrategy_;
+        static int fStatus_;
 
     	static bool runShortCombinations; 
         //static void setDefaultIntegrator(RooCategory &cat, const std::string & val) ;
