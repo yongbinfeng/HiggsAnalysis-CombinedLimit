@@ -965,7 +965,6 @@ void FitDiagnostics::setNormsFitResultTrees(const RooArgSet *args, double * vals
 	 
          for (TObject *a = iter->Next(); a != 0; a = iter->Next()) { 
                  RooRealVar *rcv = dynamic_cast<RooRealVar *>(a);   
-                 std::cout << "index " << count << ", Name " << rcv->GetName() << ", val " <<  rcv->getVal() << std::endl;
 		 std::string name = rcv->GetName();
 		 vals[count]=rcv->getVal();
 		 count++;
