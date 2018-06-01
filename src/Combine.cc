@@ -894,7 +894,6 @@ void Combine::run(TString hlfFile, const std::string &dataset, double &limit, do
   std::auto_ptr<RooAbsPdf> nuisancePdf;
   if (nToys > 0) {
     if (genPdf == 0) throw std::invalid_argument("You can't generate background-only toys if you have no background-only pdf in the workspace and you have set --noMCbonly");
-    toymcoptutils::SimPdfGenInfo newToyMC(*genPdf, *observables, !unbinned_); 
     double expLimit = 0;
     unsigned int nLimits = 0;
     w->loadSnapshot("clean");
@@ -959,6 +958,7 @@ void Combine::run(TString hlfFile, const std::string &dataset, double &limit, do
 	// Also save the current state of the tree here but specify the quantile as -2 (i.e not the default, something specific to the toys)
 	if (saveToys_) commitPoint(false,-2);
 	if (isExtended) {
+          toymcoptutils::SimPdfGenInfo newToyMC(*genPdf, *observables, !unbinned_);
           absdata_toy = newToyMC.generate(weightVar_); // as simple as that
 	} else {
 	  RooDataSet *data_toy = genPdf->generate(*observables,1);
