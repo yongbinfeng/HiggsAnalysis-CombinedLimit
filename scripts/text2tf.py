@@ -24,9 +24,7 @@ from HiggsAnalysis.CombinedLimit.DatacardParser import *
 from HiggsAnalysis.CombinedLimit.ModelTools import *
 from HiggsAnalysis.CombinedLimit.ShapeTools import *
 from HiggsAnalysis.CombinedLimit.PhysicsModel import *
-from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyHessOptimizerInterface
-from HiggsAnalysis.CombinedLimit.bfgscustom import minimize_bfgs_custom, _minimize_trustregion_constr_custom
-
+from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 addDatacardParserOptions(parser)
@@ -37,7 +35,7 @@ parser.add_option("-t","--toys", default=0, type=int, help="run a given number o
 parser.add_option("","--toysFrequentist", default=True, action='store_true', help="run frequentist-type toys by randomizing constraint minima")
 parser.add_option("","--bypassFrequentistFit", default=True, action='store_true', help="bypass fit to data when running frequentist toys to get toys based on prefit expectations")
 parser.add_option("","--bootstrapData", default=False, action='store_true', help="throw toys directly from observed data counts rather than expectation from templates")
-parser.add_option("","--tolerance", default=1e-5, type=float, help="convergence tolerance for minimizer")
+parser.add_option("","--tolerance", default=1e-3, type=float, help="convergence tolerance for minimizer")
 parser.add_option("","--expectSignal", default=1., type=float, help="rate multiplier for signal expectation (used for fit starting values and for toys)")
 parser.add_option("","--seed", default=123456789, type=int, help="random seed for toys")
 (options, args) = parser.parse_args()
@@ -73,6 +71,7 @@ nsyst = len(DC.systs)
 npoi = len(DC.signals)
 
 dtype = 'float64'
+#dtype = 'float32'
 
 MB = ShapeBuilder(DC, options)
 
@@ -109,7 +108,7 @@ for chan in DC.bins:
   nbins = nbinschan[chan]
   
   datahist = MB.getShape(chan,"data_obs")
-  datanp = np.array(datahist)[1:-1]
+  datanp = np.array(datahist).astype(dtype)[1:-1]
   data_obs = np.concatenate((data_obs,datanp))
   
   normchan = np.empty([nbins,0],dtype=dtype)
@@ -218,14 +217,14 @@ for ipoi,signal in enumerate(signals):
 
 #initial value for signal strenghts
 #rv = options.expectSignal*np.ones([npoi]).astype(dtype)
-rv = math.log(options.expectSignal) + np.zeros([npoi]).astype(dtype)
+logrv = math.log(options.expectSignal) + np.zeros([npoi]).astype(dtype)
 
 
 #initial value for nuisances
 thetav = np.zeros([nsyst]).astype(dtype)
 
 #combined initializer for all fit parameters
-rthetav = np.concatenate((rv,thetav),axis=0)
+logrthetav = np.concatenate((logrv,thetav),axis=0)
 
 
 #data
@@ -235,19 +234,15 @@ theta0 = tf.Variable(np.zeros_like(thetav), trainable=False)
 
 
 #tf variable containing all fit parameters
-rtheta = tf.Variable(rthetav)
-rotation = tf.Variable(np.eye(npoi+nsyst,dtype=dtype),trainable=False)
-rthetatrans = tf.reshape(tf.matmul(rotation,tf.reshape(rtheta,[-1,1])),[-1])
+logrtheta = tf.Variable(logrthetav)
 
 #split back into signal strengths and nuisances
-r = rtheta[:npoi]
-theta = rtheta[npoi:]
-#r = rthetatrans[:npoi]
-#theta = rthetatrans[npoi:]
+logr = logrtheta[:npoi]
+theta = logrtheta[npoi:]
 
 #matrices encoding effect of signal strengths
 #rkr = tf.pow(r,kr)
-rkr = tf.exp(r*kr)
+rkr = tf.exp(logr*kr)
 rnorm = tf.reduce_prod(rkr, axis=-1)
 
 #interpolation for asymmetric log-normal
@@ -281,33 +276,14 @@ lc = tf.reduce_sum(0.5*tf.square(theta - theta0))
 l = ln + lc
 l = tf.identity(l,name="loss")
 
-grads = tf.gradients(l,rtheta)
+grads = tf.gradients(l,logrtheta)
 grads = tf.identity(grads,"loss_grads")
 
 grad = grads[0]
 
 #uncertainty computation
-hess = tf.hessians(l,rtheta)[0]
+hess = tf.hessians(l,logrtheta)[0]
 hess = tf.identity(hess,name="loss_hessian")
-
-#unstackedgrad = tf.unstack(tf.reshape(grad,[1,-1]),axis=-1)
-#gunstackedgrad = tf.gradients(unstackedgrad,rtheta)
-
-#gradsq = tf.map_fn(lambda x : tf.gradients(x,rtheta)[0],grad,parallel_iterations=32)
-
-#hessalt = tf.stack([tf.gradients(g,rtheta)[0] for g in tf.unstack(grad)])
-
-#hessalt = tf.map_fn(lambda x: tf.gradients(x,rtheta),grad,dtype=[dtype])
-
-#hessalt = tf.stack(tf.gradients(tf.unstack(tf.reshape(tf.gradients(l,rtheta)[0],[1,-1]),axis=0),rtheta),axis=0)
-
-
-
-invhess = tf.matrix_inverse(hess)
-sigmas = tf.sqrt(tf.diag_part(invhess))
-
-opt = tf.contrib.opt.NadamOptimizer().minimize(l)
-
 
 #initialize output tree
 f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
@@ -318,6 +294,9 @@ tree.Branch('seed',tseed,'seed/I')
 
 titoy = array('i',[0])
 tree.Branch('itoy',titoy,'itoy/I')
+
+tstatus = array('i',[0])
+tree.Branch('status',tstatus,'status/I')
 
 terrstatus = array('i',[0])
 tree.Branch('errstatus',terrstatus,'errstatus/I')
@@ -354,30 +333,17 @@ for syst in DC.systs:
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
-
-#print("grad")
-#print(sess.run(grad))
-
-#print("hess")
-#print(sess.run(hess))
-
-##print("debug")
-##print(sess.run(gradsq))
-
-#print("hessalt:")
-#print(sess.run(hessalt))
-
-#exit(0)
-
-
 ntoys = options.toys
 if ntoys <= 0:
   ntoys = 1
 
+xtol = np.finfo(dtype).eps
+
 #prefit to data if needed
 if options.toys>0 and options.toysFrequentist and not options.bypassFrequentistFit:
-      tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom).minimize(sess)
-      rthetav = sess.run(thetav)
+  minimizer = ScipyTROptimizerInterface(l, options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+  ret = minimizer.minimize(sess)
+  logrthetav = sess.run(thetav)
 
 def printfunc(l):
   print(l)
@@ -388,30 +354,11 @@ def printstep(x,y):
 for itoy in range(ntoys):
   titoy[0] = itoy
   
-  sess.run(rtheta.assign(rthetav))
-  
-  #apply PCA from asimov toy
-  sess.run(nobs.assign(nexp))
-  
-  xval, gradval, hessval = sess.run([rtheta,grad,hess])
+  sess.run(logrtheta.assign(logrthetav))
     
-  invhess = np.linalg.inv(hessval)
-  eigvals, eigvects = np.linalg.eigh(invhess)
-
-  rotval = np.transpose(eigvects/np.sqrt(eigvals))
-  
-  sess.run(rtheta.assign(np.reshape(np.matmul(rotval,np.reshape(rthetav,[-1,1])),[-1])))
-  sess.run(rotation.assign(np.linalg.inv(rotval)))  
-  
-  
-  xval, gradval, hessval = sess.run([rtheta,grad,hess])
-  print("new hessval:")
-  print(hessval)  
-  
   if options.toys < 0:
     print("Running fit to asimov toy")
     sess.run(nobs.assign(nexp))
-    #sess.run(rtheta.assign(1.1*rthetav))
   elif options.toys == 0:
     print("Running fit to observed data")
     sess.run(nobs.assign(data_obs))
@@ -428,52 +375,30 @@ for itoy in range(ntoys):
       #randomize nuisance constraint minima
       sess.run(theta0.assign(theta + tf.random_normal(shape=thetav.shape,dtype=dtype)))
       thetatmp = sess.run(theta0)
-      rthetatmp = np.concatenate((rthetav[:npoi],thetatmp),axis=0)
-      sess.run(rtheta.assign(rthetatmp))
+      logrthetatmp = np.concatenate((logrthetav[:npoi],thetatmp),axis=0)
+      sess.run(logrtheta.assign(logrthetatmp))
     else:
-      #randomize actual values (TODO)
-      pass
-  
-  xval, gradval, hessval = sess.run([rtheta,grad,hess])
-  ##try:
-    ##chol = np.linalg.cholesky(hessval)
-    ##isconvex = True
-  ##except np.linalg.LinAlgError:
-    ##isconvex = False
-    
-  #invhess = np.linalg.inv(hessval)
-  #eigvals, eigvects = np.linalg.eigh(invhess)
-  
-  #print("eigvals")
-  #print(eigvals)
-  #print("eigvects")
-  #print(eigvects)
-  
-  
-  ##for vect,val in zip(eigvects,eigvals):
-    ##vect *= 1./val/val
-  ##eigvects /= np.sqrt(eigvals)
-  #rotval = np.transpose(eigvects/np.sqrt(eigvals))
+      #randomize actual values
+      sess.run(logrtheta.assign(tf.concat([logr,theta+tf.random_normal(shape=thetav.shape,dtype=dtype)],axis=0)))
 
-  ##eigvects = eigvects/np.sqrt(np.reshape(eigvals))
+  minimizer = ScipyTROptimizerInterface(l, options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+  ret = minimizer.minimize(sess)
 
-  ##eigvects = np.matmul(np.diagflat(1./np.sqrt(eigvals)),eigvects)
+  xval, gradval, hessval = sess.run([logrtheta,grad,hess])
 
+  isposdef = np.all(np.greater_equal(np.linalg.eigvalsh(hessval),0.))
   
-  #sess.run(rtheta.assign(np.reshape(np.matmul(rotval,np.reshape(rthetav,[-1,1])),[-1])))
-  #sess.run(rotation.assign(np.linalg.inv(rotval)))
-           
-           
+  #get fit values
+  logrvals = xval[:npoi]
+  thetavals = xval[npoi:]  
+  
+  #transformation from logr to r
+  rvals = np.exp(logrvals)
+  jac = np.diagflat(np.concatenate((np.exp(-logrvals),np.ones_like(thetav)),axis=0))
+  jact = np.transpose(jac)
+  hessval = np.matmul(jact,np.matmul(hessval,jac))
 
-  
-  
-  print(np.linalg.eigvalsh(hessval))
-  #isconvex = np.all(np.greater_equal(np.linalg.eigvalsh(hessval),0.))
-  isconvex = np.all(np.greater(np.linalg.eigvalsh(hessval),-1e-6))
-  print("isconvex: %r" % isconvex)
-  print("condition = %e" % np.linalg.cond(hessval))
-  
-  try:
+  try:        
     invhess = np.linalg.inv(hessval)
     sigmasv = np.sqrt(np.diag(invhess))
     edmval = 0.5*np.matmul(np.matmul(np.transpose(gradval),invhess),gradval)
@@ -484,132 +409,24 @@ for itoy in range(ntoys):
     sigmasv = -99.*np.ones_like(xval)
     edmval = -99.
     errstatus = 2    
-    
-  print("full edmval = %e" % edmval)  
   
-  #if not isconvex:
+  if isposdef and edmval > 0. and edmval<options.tolerance:
+    status = 0
+  else:
+    status=1
     
-    #for i in range(2000):
-      #lo, _ = sess.run([l, opt])
-      ##_, lo = sess.run( [rtheta.assign(rtheta - tf.reshape( tf.matrix_triangular_solve(hess,tf.reshape(grad,[-1,1])),[-1]) ), l] )
-      #print(lo)
+  print("status = %i, errstatus = %i, edmval = %e" % (status,errstatus,edmval))
   
-    #xval, gradval, hessval = sess.run([rtheta,grad,hess])
-    
-    #print(np.linalg.eigvalsh(hessval))
-    #isconvex = np.all(np.greater(np.linalg.eigvalsh(hessval),-1e-6))
-    #print("isconvex: %r" % isconvex)
-    
-    ##try:
-      ##chol = np.linalg.cholesky(hessval)
-      ##isconvex = True
-    ##except np.linalg.LinAlgError:
-      ##isconvex = False
-  ##print(sess.run(nexp))
-  ##print(sess.run(nobs))
-  
-  
-    #print("isconvex: %r" % isconvex)
-  
-  #minimizer = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom)
-  #minimizer = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom,fetches = [l], loss_callback=printfunc)
-
-  #minimizer = tf.contrib.opt.ScipyOptimizerInterface(l, options={'disp': True, 'hess' : scipy.optimize.SR1()}, method=_minimize_trustregion_constr)
-  #minimizer = ScipyHessOptimizerInterface(l, options={'disp': True, 'maxiter' : 100000}, method='trust-constr')
-  
-  
-  edmtolfinal = 1e-3
-  edmtol = 0.01*edmtolfinal
-  for ifit in range(1):
-    minimizer = ScipyHessOptimizerInterface(l, options={'disp': True, 'maxiter' : 10000, 'gtol' : 0., 'xtol' : 0., 'barrier_tol' : 0., 'edmtol' : 1e-5}, method=_minimize_trustregion_constr_custom)
-    
-    #minimizer = ScipyHessOptimizerInterface(l, options={'disp': True, 'gtol' : 0., 'edmtol': options.tolerance}, method=minimize_bfgs_custom)
-    
-    
-    ret = minimizer.minimize(sess,fetches=[l],loss_callback=printfunc)
-    #ret = minimizer.minimize(sess,fetches=[l])
-
-
-    xval, gradval, hessval = sess.run([rtheta,grad,hess])
-  
-    print(np.linalg.eigvalsh(hessval))
-    isconvex = np.all(np.greater(np.linalg.eigvalsh(hessval),-1e-6))
-    isconvexstrict = np.all(np.greater_equal(np.linalg.eigvalsh(hessval),0.))
-    print("isconvex: %r" % isconvex)
-    print("isconvexstrict: %r" % isconvexstrict)
-    
-    try:
-      invhess = np.linalg.inv(hessval)
-      sigmasv = np.sqrt(np.diag(invhess))
-      edmval = 0.5*np.matmul(np.matmul(np.transpose(gradval),invhess),gradval)
-      errstatus = 0
-      if np.any(np.isnan(sigmasv)):
-        errstatus = 1
-    except np.linalg.LinAlgError:
-      sigmasv = -99.*np.ones_like(xval)
-      edmval = -99.
-      errstatus = 2    
-      
-    print("full edmval = %e" % edmval)
-    
-    
-    
-    if isconvexstrict and edmval > 0. and edmval<edmtolfinal:
-      break
-    
-    #if edmtol>0.1*edmtolfinal:
-      #edmtol/=10
-    
-    #invhess = np.linalg.inv(hessval)
-    #edmval = 0.5*np.matmul(np.matmul(np.transpose(gradval),invhess),gradval)
-
-    
-    #edmtol /= 10.
-  
-  #ret = minimizer.minimize(sess)
-  #ret = minimizer.minimize(sess,fetches=[l],loss_callback=printfunc)
-  #ret = minimizer.minimize(sess,fetches=[l],loss_callback=printfunc,step_callback=printstep)
-
-  #get fit results
-  #xval, gradval, hessval = sess.run([rtheta,grad,hess])
-
-  #try:
-    #chol = np.linalg.cholesky(hessval)
-    #isconvex = True
-  #except np.linalg.LinAlgError:
-    #isconvex = False
-
-  #print("isconvex: %r" % isconvex)
-
-  
-  #compute uncertainties and diagnostics  
-  try:
-    invhess = np.linalg.inv(hessval)
-    sigmasv = np.sqrt(np.diag(invhess))
-    edmval = 0.5*np.matmul(np.matmul(np.transpose(gradval),invhess),gradval)
-    errstatus = 0
-    if np.any(np.isnan(sigmasv)):
-      errstatus = 1
-  except np.linalg.LinAlgError:
-    sigmasv = -99.*np.ones_like(xval)
-    edmval = -99.
-    errstatus = 2
-    
-  print("errstatus = %i, edmval = %e" % (errstatus,edmval))
-  
+  tstatus[0] = status
   terrstatus[0] = errstatus
   tedmval[0] = edmval
   
-  #get fit values
-  sigvals = xval[:npoi]
-  thetavals = xval[npoi:]
-
   rsigmasv = sigmasv[:npoi]
   thetasigmasv = sigmasv[npoi:]
   
   theta0vals = sess.run(theta0)
 
-  for sig,sigval,sigma,tsigval,tsigerr in zip(signals,sigvals,rsigmasv,tsigvals,tsigerrs):
+  for sig,sigval,sigma,tsigval,tsigerr in zip(signals,rvals,rsigmasv,tsigvals,tsigerrs):
     tsigval[0] = sigval
     tsigerr[0] = sigma
     if itoy==0:
