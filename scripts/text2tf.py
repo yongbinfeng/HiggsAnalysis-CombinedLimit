@@ -387,28 +387,30 @@ for itoy in range(ntoys):
   xval, gradval, hessval = sess.run([logrtheta,grad,hess])
 
   isposdef = np.all(np.greater_equal(np.linalg.eigvalsh(hessval),0.))
-  
+    
   #get fit values
   logrvals = xval[:npoi]
   thetavals = xval[npoi:]  
   
   #transformation from logr to r
   rvals = np.exp(logrvals)
-  jac = np.diagflat(np.concatenate((np.exp(-logrvals),np.ones_like(thetav)),axis=0))
+  jac = np.diagflat(np.concatenate((rvals,np.ones_like(thetav)),axis=0))
   jact = np.transpose(jac)
-  hessval = np.matmul(jact,np.matmul(hessval,jac))
-
+    
   try:        
     invhess = np.linalg.inv(hessval)
-    sigmasv = np.sqrt(np.diag(invhess))
     edmval = 0.5*np.matmul(np.matmul(np.transpose(gradval),invhess),gradval)
+    
+    #transformation from logr to r for covariance matrix
+    invhess = np.matmul(jac,np.matmul(invhess,jact))
+    sigmasv = np.sqrt(np.diag(invhess))
     errstatus = 0
     if np.any(np.isnan(sigmasv)):
       errstatus = 1
   except np.linalg.LinAlgError:
-    sigmasv = -99.*np.ones_like(xval)
     edmval = -99.
-    errstatus = 2    
+    sigmasv = -99.*np.ones_like(xval)
+    errstatus = 2
   
   if isposdef and edmval > 0. and edmval<options.tolerance:
     status = 0
