@@ -412,7 +412,7 @@ for itoy in range(ntoys):
     sigmasv = -99.*np.ones_like(xval)
     errstatus = 2
   
-  if isposdef and edmval > 0. and edmval<options.tolerance:
+  if isposdef and edmval > 0.:
     status = 0
   else:
     status=1
