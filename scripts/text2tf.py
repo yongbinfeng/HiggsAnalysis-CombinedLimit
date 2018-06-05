@@ -35,6 +35,7 @@ parser.add_option("-t","--toys", default=0, type=int, help="run a given number o
 parser.add_option("","--toysFrequentist", default=True, action='store_true', help="run frequentist-type toys by randomizing constraint minima")
 parser.add_option("","--bypassFrequentistFit", default=True, action='store_true', help="bypass fit to data when running frequentist toys to get toys based on prefit expectations")
 parser.add_option("","--bootstrapData", default=False, action='store_true', help="throw toys directly from observed data counts rather than expectation from templates")
+parser.add_option("","--randomizeStart", default=False, action='store_true', help="randomize starting values for fit (only implemented for asimov dataset for now")
 parser.add_option("","--tolerance", default=1e-3, type=float, help="convergence tolerance for minimizer")
 parser.add_option("","--expectSignal", default=1., type=float, help="rate multiplier for signal expectation (used for fit starting values and for toys)")
 parser.add_option("","--seed", default=123456789, type=int, help="random seed for toys")
@@ -201,6 +202,8 @@ print(np.max(np.abs(logkdown)))
 logkavg = 0.5*(logkup+logkdown)
 logkhalfdiff = 0.5*(logkup-logkdown)
 
+nexpnomv = np.sum(norm,axis=-1)
+
 #list of signals preserving datacard order
 signals = []
 for proc in DC.processes:
@@ -231,7 +234,7 @@ logrthetav = np.concatenate((logrv,thetav),axis=0)
 #nobs = tf.placeholder(dtype, shape=data_obs.shape)
 nobs = tf.Variable(data_obs, trainable=False)
 theta0 = tf.Variable(np.zeros_like(thetav), trainable=False)
-
+nexpnom = tf.Variable(nexpnomv, trainable=False)
 
 #tf variable containing all fit parameters
 logrtheta = tf.Variable(logrthetav)
@@ -265,16 +268,25 @@ nexp = tf.identity(nexp,name='nexp')
 nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
 lognexp = tf.log(nexpsafe)
 
+nexpnomsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexpnom)
+lognexpnom = tf.log(nexpnomsafe)
+
+
 #final likelihood computation
 
-#poison term
-ln = tf.reduce_sum(-nobs*lognexp + nexp, axis=-1)
+#poisson term
+lnfull = tf.reduce_sum(-nobs*lognexp + nexp, axis=-1)
+
+#poisson term with offset to improve numerical precision
+ln = tf.reduce_sum(-nobs*(lognexp-lognexpnom) + nexp-nexpnom, axis=-1)
 
 #constraints
 lc = tf.reduce_sum(0.5*tf.square(theta - theta0))
 
 l = ln + lc
 l = tf.identity(l,name="loss")
+
+lfull = lnfull + lc
 
 grads = tf.gradients(l,logrtheta)
 grads = tf.identity(grads,"loss_grads")
@@ -342,8 +354,11 @@ if ntoys <= 0:
 
 xtol = np.finfo(dtype).eps
 
+#set likelihood offset
+sess.run(nexpnom.assign(nexp))
+
 #prefit to data if needed
-if options.toys>0 and options.toysFrequentist and not options.bypassFrequentistFit:
+if options.toys>0 and options.toysFrequentist and not options.bypassFrequentistFit:  
   minimizer = ScipyTROptimizerInterface(l, options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
   ret = minimizer.minimize(sess)
   logrthetav = sess.run(thetav)
@@ -359,12 +374,17 @@ for itoy in range(ntoys):
   
   sess.run(logrtheta.assign(logrthetav))
     
+  dofit = True
+  
   if options.toys < 0:
     print("Running fit to asimov toy")
     sess.run(nobs.assign(nexp))
-    #hessval = sess.run(hess)
-    #invhess = np.linalg.inv(hessval)
-    #sess.run(logrtheta.assign(np.random.multivariate_normal(logrthetav,invhess)))
+    if options.randomizeStart:
+      hessval = sess.run(hess)
+      invhess = np.linalg.inv(hessval)
+      sess.run(logrtheta.assign(np.random.multivariate_normal(logrthetav,invhess)))
+    else:
+      dofit = False
   elif options.toys == 0:
     print("Running fit to observed data")
     sess.run(nobs.assign(data_obs))
@@ -387,8 +407,11 @@ for itoy in range(ntoys):
       #randomize actual values
       sess.run(logrtheta.assign(tf.concat([logr,theta+tf.random_normal(shape=thetav.shape,dtype=dtype)],axis=0)))
 
-  minimizer = ScipyTROptimizerInterface(l, options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
-  ret = minimizer.minimize(sess)
+  if dofit:
+    #set likelihood offset
+    sess.run(nexpnom.assign(nexp))
+    minimizer = ScipyTROptimizerInterface(l, options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+    ret = minimizer.minimize(sess)
 
   xval, fval, gradval, hessval = sess.run([logrtheta,l,grad,hess])
 
@@ -445,7 +468,7 @@ for itoy in range(ntoys):
     ttheta0val[0] = theta0val
     tthetaerr[0] = sigma
     if itoy==0:
-      print('%s = %f +- %f' % (syst[0], thetaval, sigma))
+      print('%s = %f +- %f (%s_In = %f)' % (syst[0], thetaval, sigma, syst[0],theta0val))
     
   tree.Fill()
 
