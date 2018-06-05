@@ -210,10 +210,10 @@ for proc in DC.processes:
 #build matrix of signal strength effects
 #hard-coded for now as one signal strength multiplier
 #per signal process
-kr = np.zeros([nproc,npoi],dtype=dtype)
+logkr = np.zeros([nproc,npoi],dtype=dtype)
 for ipoi,signal in enumerate(signals):
   iproc = DC.processes.index(signal)
-  kr[iproc][ipoi] = 1.
+  logkr[iproc][ipoi] = 1.
 
 #initial value for signal strenghts
 #rv = options.expectSignal*np.ones([npoi]).astype(dtype)
@@ -241,9 +241,7 @@ logr = logrtheta[:npoi]
 theta = logrtheta[npoi:]
 
 #matrices encoding effect of signal strengths
-#rkr = tf.pow(r,kr)
-rkr = tf.exp(logr*kr)
-rnorm = tf.reduce_prod(rkr, axis=-1)
+logrnorm = tf.reduce_sum(logkr*logr,axis=-1)
 
 #interpolation for asymmetric log-normal
 twox = 2.*theta
@@ -253,12 +251,14 @@ alpha = tf.clip_by_value(alpha,-1.,1.)
 logk = logkavg + alpha*logkhalfdiff
 
 #matrix encoding effect of nuisance parameters
-snorm = tf.reduce_prod(tf.exp(logk*theta),axis=-1)
+logsnorm = tf.reduce_sum(logk*theta,axis=-1)
+
+logrsnorm = logrnorm + logsnorm
+rsnorm = tf.exp(logrsnorm)
 
 #final expected yields per-bin including effect of signal
 #strengths and nuisance parmeters
-pnorm = snorm*rnorm*norm
-#pnorm = tf.maximum(pnorm,tf.zeros_like(pnorm))
+pnorm = rsnorm*norm
 nexp = tf.reduce_sum(pnorm,axis=-1)
 nexp = tf.identity(nexp,name='nexp')
 
@@ -333,6 +333,9 @@ for syst in DC.systs:
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
+print("min norm = %e" % np.amin(norm))
+print("min nexp = %e" % np.amin(sess.run(nexp)))
+
 ntoys = options.toys
 if ntoys <= 0:
   ntoys = 1
@@ -359,6 +362,9 @@ for itoy in range(ntoys):
   if options.toys < 0:
     print("Running fit to asimov toy")
     sess.run(nobs.assign(nexp))
+    #hessval = sess.run(hess)
+    #invhess = np.linalg.inv(hessval)
+    #sess.run(logrtheta.assign(np.random.multivariate_normal(logrthetav,invhess)))
   elif options.toys == 0:
     print("Running fit to observed data")
     sess.run(nobs.assign(data_obs))
@@ -384,7 +390,7 @@ for itoy in range(ntoys):
   minimizer = ScipyTROptimizerInterface(l, options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
   ret = minimizer.minimize(sess)
 
-  xval, gradval, hessval = sess.run([logrtheta,grad,hess])
+  xval, fval, gradval, hessval = sess.run([logrtheta,l,grad,hess])
 
   isposdef = np.all(np.greater_equal(np.linalg.eigvalsh(hessval),0.))
     
@@ -417,7 +423,7 @@ for itoy in range(ntoys):
   else:
     status=1
     
-  print("status = %i, errstatus = %i, edmval = %e" % (status,errstatus,edmval))
+  print("status = %i, errstatus = %i, fval = %f, edmval = %e" % (status,errstatus,fval,edmval))
   
   tstatus[0] = status
   terrstatus[0] = errstatus
