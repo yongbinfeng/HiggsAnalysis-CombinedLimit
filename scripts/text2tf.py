@@ -39,6 +39,7 @@ parser.add_option("","--randomizeStart", default=False, action='store_true', hel
 parser.add_option("","--tolerance", default=1e-3, type=float, help="convergence tolerance for minimizer")
 parser.add_option("","--expectSignal", default=1., type=float, help="rate multiplier for signal expectation (used for fit starting values and for toys)")
 parser.add_option("","--seed", default=123456789, type=int, help="random seed for toys")
+parser.add_option("","--fitverbose", default=0, type=int, help="verbosity level for fit")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -357,7 +358,7 @@ bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=
 
 
 xtol = np.finfo(dtype).eps
-minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 
 #initialize tf session
 sess = tf.Session()
