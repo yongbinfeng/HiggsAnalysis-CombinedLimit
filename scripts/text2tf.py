@@ -355,6 +355,10 @@ frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=thetav.shape
 thetastartassign = tf.assign(logrtheta, tf.concat([logr,theta0],axis=0))
 bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=thetav.shape,dtype=dtype)],axis=0))
 
+
+xtol = np.finfo(dtype).eps
+minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+
 #initialize tf session
 sess = tf.Session()
 sess.run(globalinit)
@@ -366,15 +370,12 @@ ntoys = options.toys
 if ntoys <= 0:
   ntoys = 1
 
-xtol = np.finfo(dtype).eps
-
 #set likelihood offset
 sess.run(nexpnomassign)
 
 #prefit to data if needed
 if options.toys>0 and options.toysFrequentist and not options.bypassFrequentistFit:  
   sess.run(nexpnomassign)
-  minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
   ret = minimizer.minimize(sess)
   logrthetav = sess.run(thetav)
 
@@ -423,7 +424,6 @@ for itoy in range(ntoys):
   #set likelihood offset
   sess.run(nexpnomassign)
   if dofit:
-    minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
     ret = minimizer.minimize(sess)
 
   xval, fval, gradval, hessval = sess.run([logrtheta,l,grad,hess])
