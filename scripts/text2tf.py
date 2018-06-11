@@ -489,10 +489,10 @@ for itoy in range(ntoys):
       #randomize from expectation
       sess.run(toyassign)      
 
-  #set likelihood offset
-  sess.run(nexpnomassign)
   #assign start values for nuisance parameters to constraint minima
   sess.run(thetastartassign)
+  #set likelihood offset
+  sess.run(nexpnomassign)
   if dofit:
     ret = minimizer.minimize(sess)
 
