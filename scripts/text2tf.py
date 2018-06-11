@@ -476,23 +476,23 @@ for itoy in range(ntoys):
     if options.toysFrequentist:
       #randomize nuisance constraint minima
       sess.run(frequentistassign)
-      #assign start values for nuisance parameters to constraint minima
-      sess.run(thetastartassign)
     else:
       #randomize actual values
-      sess.run(bayesassign)
-      xvalgen = sess.run(logrtheta)
+      sess.run(bayesassign)      
       
     if options.bootstrapData:
       #randomize from observed data
       sess.run(bootstrapassign)
       xvalgen = -1.*np.ones_like(xvalgen)
     else:
+      xvalgen = sess.run(logrtheta)
       #randomize from expectation
       sess.run(toyassign)      
 
   #set likelihood offset
   sess.run(nexpnomassign)
+  #assign start values for nuisance parameters to constraint minima
+  sess.run(thetastartassign)
   if dofit:
     ret = minimizer.minimize(sess)
 
