@@ -45,6 +45,7 @@ parser.add_option("","--scan", default=[], type="string", action="append", help=
 parser.add_option("","--scanPoints", default=16, type=int, help="default number of points for likelihood scan")
 parser.add_option("","--scanRange", default=3., type=float, help="default scan range in terms of hessian uncertainty")
 parser.add_option("","--allowNegativeExpectation", default=False, action='store_true', help="allow negative expectation")
+parser.add_option("","--freezePOIs", default=False, action='store_true', help="freeze POIs")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -76,6 +77,8 @@ print(options)
 nproc = len(DC.processes)
 nsyst = len(DC.systs)
 npoi = len(DC.signals)
+if options.freezePOIs:
+  npoi = 0
 
 dtype = 'float64'
 #dtype = 'float32'
@@ -208,9 +211,10 @@ print("nbins = %d, ntotal = %e, npoi = %d, nsyst = %d" % (nexpnomv.shape[0], np.
 
 #list of signals preserving datacard order
 signals = []
-for proc in DC.processes:
-  if DC.isSignal[proc]:
-    signals.append(proc)
+if not options.freezePOIs:
+  for proc in DC.processes:
+    if DC.isSignal[proc]:
+      signals.append(proc)
 
 systs = []
 for syst in DC.systs:
