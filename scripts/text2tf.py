@@ -311,10 +311,9 @@ x0 = tf.Variable(logrthetav,trainable=False)
 a = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
 errdir = tf.Variable(np.zeros_like(logrthetav,dtype=dtype),trainable=False)
 
-errproj = tf.reduce_sum((logrtheta-x0)*errdir,axis=0)
-errprojsq = -0.5*tf.square(errproj)
+errproj = -tf.reduce_sum((logrtheta-x0)*errdir,axis=0)
 
-dxconstraint = a - errproj
+dxconstraint = a + errproj
 dlconstraint = (l - l0)
 
 globalinit = tf.global_variables_initializer()
@@ -331,7 +330,7 @@ bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=
 xtol = np.finfo(dtype).eps
 minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 minimizerscan = ScipyTROptimizerInterface(l, var_list = [logrtheta],equalities=[dxconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
-minimizerminos = ScipyTROptimizerInterface(errprojsq, var_list = [logrtheta],equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+minimizerminos = ScipyTROptimizerInterface(errproj, var_list = [logrtheta],equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 
 #initialize output tree
 f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
