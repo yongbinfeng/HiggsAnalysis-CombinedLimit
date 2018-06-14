@@ -191,7 +191,7 @@ for chan in chans:
           normhistdown = MB.getShape(chan,proc,name+"Down")
           normnpdown = np.array(normhistdown).astype(dtype)[1:-1]
           normnpdown = np.reshape(normnpdown,[-1,1])
-          if normnpup.shape[0] != nbins:
+          if normnpdown.shape[0] != nbins:
             raise Exception("Error: number of bins in histogram does not match between nominal and systematic variation")
           logkdownsyst = -kfac*np.log(normnpdown/normnp)
           logkdownsyst = np.where(np.equal(np.sign(normnp*normnpdown),1), logkdownsyst, -logkepsilon*np.ones_like(logkdownsyst))
