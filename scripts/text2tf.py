@@ -33,6 +33,7 @@ parser.add_option("--PO", "--physics-option", dest="physOpt", default=[],  type=
 parser.add_option("", "--dump-datacard", dest="dumpCard", default=False, action='store_true',  help="Print to screen the DataCard as a python config and exit")
 parser.add_option("","--allowNegativeExpectation", default=False, action='store_true', help="allow negative expectation")
 parser.add_option("","--freezePOIs", default=False, action='store_true', help="freeze POIs")
+parser.add_option("","--maskedChan", default=[], type="string",action="append", help="channels to be masked in likelihood but propagated through for later storage/analysis")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -59,25 +60,44 @@ print(options)
 nproc = len(DC.processes)
 nsyst = len(DC.systs)
 npoi = len(DC.signals)
-if options.freezePOIs:
-  npoi = 0
 
 dtype = 'float64'
 
 MB = ShapeBuilder(DC, options)
 
-#determine number of bins for each channel
-nbinschan = {}
-nbinstotal = 0
-for chan in DC.bins:
-  expchan = DC.exp[chan]
+#list of processes, signals first
+procs = []
+for proc in DC.processes:
+  if DC.isSignal[proc]:
+    procs.append(proc)
+
+for proc in DC.processes:
+  if not DC.isSignal[proc]:
+    procs.append(proc)    
+
+#list of signals preserving datacard order
+signals = []
+if not options.freezePOIs:
   for proc in DC.processes:
-    if proc in expchan:
-      datahist = MB.getShape(chan,"data_obs")
-      nbins = datahist.GetNbinsX()
-      nbinschan[chan] = nbins
-      nbinstotal += nbins
-      break
+    if DC.isSignal[proc]:
+      signals.append(proc)
+      
+#list of systematic uncertainties (nuisances)
+systs = []
+for syst in DC.systs:
+  systs.append(syst[0])
+  
+#list of channels, ordered such that masked channels are last
+chans = []
+for chan in DC.bins:
+  if not chan in options.maskedChan:
+    chans.append(chan)
+
+maskedchans = []
+for chan in DC.bins:
+  if chan in options.maskedChan:
+    chans.append(chan)
+    maskedchans.append(chan)
 
 #fill data, expected yields, and kappas
 
@@ -90,23 +110,30 @@ for chan in DC.bins:
 
 logkepsilon = math.log(1e-3)
 
+nbinstotal = 0
+nbinsmasked = 0
 data_obs = np.empty([0],dtype=dtype)
 norm = np.empty([0,nproc],dtype=dtype)
 logkup = np.empty([0,nproc,nsyst],dtype=dtype)
 logkdown = np.empty([0,nproc,nsyst],dtype=dtype)
-for chan in DC.bins:
+for chan in chans:
   expchan = DC.exp[chan]
-  nbins = nbinschan[chan]
-  
-  datahist = MB.getShape(chan,"data_obs")
-  datanp = np.array(datahist).astype(dtype)[1:-1]
-  data_obs = np.concatenate((data_obs,datanp))
-  
+    
+  #FIXME:  hack to run without observed data for masked channels
+  if chan in options.maskedChan:
+    nbins = 1
+    nbinsmasked += nbins
+  else:
+    datahist = MB.getShape(chan,"data_obs")
+    datanp = np.array(datahist).astype(dtype)[1:-1]
+    data_obs = np.concatenate((data_obs,datanp))
+    nbins = datanp.shape[0]
+
   normchan = np.empty([nbins,0],dtype=dtype)
   logkupchan = np.empty([nbins,0,nsyst],dtype=dtype)
   logkdownchan = np.empty([nbins,0,nsyst],dtype=dtype)
-  for proc in DC.processes:
-    hasproc = proc in DC.exp[chan]
+  for proc in procs:
+    hasproc = proc in expchan
     
     if hasproc:
       normhist = MB.getShape(chan,proc)
@@ -179,7 +206,8 @@ for chan in DC.bins:
   logkup = np.concatenate((logkup,logkupchan),axis=0)
   logkdown = np.concatenate((logkdown,logkdownchan),axis=0)
   
-  
+  nbinstotal += nbins
+    
 print(np.max(np.abs(logkup)))
 print(np.max(np.abs(logkdown)))
   
@@ -188,26 +216,12 @@ logkhalfdiff = 0.5*(logkup-logkdown)
 
 nexpnomv = np.sum(norm,axis=-1)
 
+#discard masked channels where not needed
+data_obs = data_obs[:nbinstotal-nbinsmasked]
+nexpnomv = nexpnomv[:nbinstotal-nbinsmasked]
+
 print("nbins = %d, ntotal = %e, npoi = %d, nsyst = %d" % (nexpnomv.shape[0], np.sum(nexpnomv), npoi, nsyst))
 
-#list of signals preserving datacard order
-signals = []
-if not options.freezePOIs:
-  for proc in DC.processes:
-    if DC.isSignal[proc]:
-      signals.append(proc)
-
-systs = []
-for syst in DC.systs:
-  systs.append(syst[0])
-
-#build matrix of signal strength effects
-#hard-coded for now as one signal strength multiplier
-#per signal process
-logkr = np.zeros([nproc,npoi],dtype=dtype)
-for ipoi,signal in enumerate(signals):
-  iproc = DC.processes.index(signal)
-  logkr[iproc][ipoi] = 1.
 
 #initial value for signal strenghts
 logrv = np.zeros([npoi]).astype(dtype)
@@ -218,9 +232,10 @@ thetav = np.zeros([nsyst]).astype(dtype)
 #combined initializer for all fit parameters
 logrthetav = np.concatenate((logrv,thetav),axis=0)
 
-
+cprocs = tf.constant(procs,name="cprocs")
 csignals = tf.constant(signals,name="csignals")
 csysts = tf.constant(systs,name="csysts")
+cmaskedchans = tf.constant(maskedchans,name="cmaskedchans")
 
 #data
 #nobs = tf.placeholder(dtype, shape=data_obs.shape)
@@ -238,8 +253,8 @@ theta = logrtheta[npoi:]
 logr = tf.identity(logr,name="logr")
 theta = tf.identity(theta,name="theta")
 
-#matrices encoding effect of signal strengths
-logrnorm = tf.reduce_sum(logkr*logr,axis=-1)
+#vector encoding effect of signal strengths
+logrnorm = tf.concat([logr,tf.zeros([nproc-npoi],dtype=dtype)],axis=0)
 
 #interpolation for asymmetric log-normal
 twox = 2.*theta
@@ -256,7 +271,16 @@ rsnorm = tf.exp(logrsnorm)
 
 #final expected yields per-bin including effect of signal
 #strengths and nuisance parmeters
-pnorm = rsnorm*norm
+pnormfull = rsnorm*norm
+if nbinsmasked>0:
+  pnorm = pnormfull[:nbinstotal-nbinsmasked]
+else:
+  pnorm = pnormfull
+  
+print(pnorm.shape)
+  
+pnormmasked = pnormfull[nbinstotal-nbinsmasked:]
+  
 nexp = tf.reduce_sum(pnorm,axis=-1)
 nexp = tf.identity(nexp,name='nexp')
 
@@ -269,7 +293,7 @@ lognexpnom = tf.log(nexpnomsafe)
 
 #final likelihood computation
 
-#poisson term
+#poisson term  
 lnfull = tf.reduce_sum(-nobs*lognexp + nexp, axis=-1)
 
 #poisson term with offset to improve numerical precision
@@ -283,6 +307,12 @@ l = tf.identity(l,name="loss")
 
 lfull = lnfull + lc
 lfull = tf.identity(lfull,name="lossfull")
+
+pmaskedexp = tf.reduce_sum(pnormmasked, axis=0)
+pmaskedexp = tf.identity(pmaskedexp, name="pmaskedexp")
+
+maskedexp = tf.reduce_sum(pnormmasked, axis=-1)
+maskedexp = tf.identity(maskedexp,"maskedexp")
 
 basename = '.'.join(options.fileName.split('.')[:-1])
 tf.train.export_meta_graph(filename='%s.meta' % basename)
