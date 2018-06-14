@@ -141,6 +141,9 @@ for chan in chans:
       normnp = np.reshape(normnp,[-1,1])
       if not options.allowNegativeExpectation:
         normnp = np.maximum(normnp,0.)
+        
+      if normnp.shape[0] != nbins:
+        raise Exception("Error: number of bins in histogram does not match between expectation and observation")
     else:
       normnp = np.zeros([nbins,1],dtype=dtype)
       
@@ -179,6 +182,8 @@ for chan in chans:
           normhistup = MB.getShape(chan,proc,name+"Up")
           normnpup = np.array(normhistup).astype(dtype)[1:-1]
           normnpup = np.reshape(normnpup,[-1,1])
+          if normnpup.shape[0] != nbins:
+            raise Exception("Error: number of bins in histogram does not match between nominal and systematic variation")
           logkupsyst = kfac*np.log(normnpup/normnp)
           logkupsyst = np.where(np.equal(np.sign(normnp*normnpup),1), logkupsyst, logkepsilon*np.ones_like(logkupsyst))
           logkupsyst = np.reshape(logkupsyst,[-1,1,1])
@@ -186,6 +191,8 @@ for chan in chans:
           normhistdown = MB.getShape(chan,proc,name+"Down")
           normnpdown = np.array(normhistdown).astype(dtype)[1:-1]
           normnpdown = np.reshape(normnpdown,[-1,1])
+          if normnpup.shape[0] != nbins:
+            raise Exception("Error: number of bins in histogram does not match between nominal and systematic variation")
           logkdownsyst = -kfac*np.log(normnpdown/normnp)
           logkdownsyst = np.where(np.equal(np.sign(normnp*normnpdown),1), logkdownsyst, -logkepsilon*np.ones_like(logkdownsyst))
           logkdownsyst = np.reshape(logkdownsyst,[-1,1,1])
