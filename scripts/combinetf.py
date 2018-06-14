@@ -65,6 +65,7 @@ nexpnom = graph.get_tensor_by_name("nexpnom:0")
 nobs = filter(lambda x: x.name == 'nobs:0', variables)[0]
 pmaskedexp = graph.get_tensor_by_name("pmaskedexp:0")
 maskedexp = graph.get_tensor_by_name("maskedexp:0")
+pmaskedexpnorm = graph.get_tensor_by_name("pmaskedexpnorm:0")
 
 cprocs = graph.get_tensor_by_name("cprocs:0")
 csignals = graph.get_tensor_by_name("csignals:0")
@@ -197,12 +198,16 @@ for sig in signals:
   tree.Branch('%s_gen' % sig, tsiggenval, '%s_gen/F' % sig)
 
 tpmaskedexps = []
+tpmaskedexpnorms = []
 if len(maskedchans)>0:
   for proc,pmaskedexpval in zip(procs,pmaskedexpvals):
     tpmaskedexp = array('f', [1.])
+    tpmaskedexpnorm = array('f', [1.])
     tpmaskedexps.append(tpmaskedexp)
+    tpmaskedexpnorms.append(tpmaskedexpnorm)
     if pmaskedexpval > 0.:
       tree.Branch('%s_pmaskedexp' % proc, tpmaskedexp, '%s_pmaskedexp/F' % proc)
+      tree.Branch('%s_pmaskedexpnorm' % proc, tpmaskedexpnorm, '%s_pmaskedexpnorm/F' % proc)
 
 tthetavals = []
 ttheta0vals = []
@@ -314,6 +319,7 @@ for itoy in range(ntoys):
   theta0vals = sess.run(theta0)
   
   pmaskedexpvals = sess.run(pmaskedexp)
+  pmaskedexpnormvals = sess.run(pmaskedexpnorm)
   maskedexpvals = sess.run(maskedexp)
   
   #transformation from logr to r
@@ -437,8 +443,9 @@ for itoy in range(ntoys):
     if itoy==0:
       print('%s = %f +- %f (+%f -%f)' % (sig,sigval,sigma,minosup,minosdown))
 
-  for proc,pmaskedexpval,tpmaskedexp in zip(procs,pmaskedexpvals,tpmaskedexps):
+  for proc,pmaskedexpval,pmaskedexpnormval, tpmaskedexp, tpmaskedexpnorm in zip(procs,pmaskedexpvals,pmaskedexpnormvals,tpmaskedexps,tpmaskedexpnorms):
     tpmaskedexp[0] = pmaskedexpval
+    tpmaskedexpnorm[0] = pmaskedexpnormval
     
   for maskedchan,maskedexpval,tmaskedexp in zip(maskedchans,maskedexpvals,tmaskedexps):
     tmaskedexp[0] = maskedexpval
@@ -497,6 +504,7 @@ for itoy in range(ntoys):
         rvals = np.exp(logrvals)
         
         pmaskedexpvals = sess.run(pmaskedexp)
+        pmaskedexpnormvals = sess.run(pmaskedexpnorm)
         maskedexpvals = sess.run(maskedexp)
         
         tscanidx[0] = erridx
@@ -506,8 +514,9 @@ for itoy in range(ntoys):
         for sig,sigval,sigma,minosup,minosdown,tsigval,tsigerr,tsigminosup,tsigminosdown in zip(signals,rvals,rsigmasv,rminosups,rminosdowns,tsigvals,tsigerrs,tsigminosups,tsigminosdowns):
           tsigval[0] = sigval
           
-        for proc,pmaskedexpval,tpmaskedexp in zip(procs,pmaskedexpvals,tpmaskedexps):
+        for proc,pmaskedexpval,pmaskedexpnormval, tpmaskedexp, tpmaskedexpnorm in zip(procs,pmaskedexpvals,pmaskedexpnormvals,tpmaskedexps,tpmaskedexpnorms):
           tpmaskedexp[0] = pmaskedexpval
+          tpmaskedexpnorm[0] = pmaskedexpnormval
           
         for maskedchan,maskedexpval,tmaskedexp in zip(maskedchans,maskedexpvals,tmaskedexps):
           tmaskedexp[0] = maskedexpval

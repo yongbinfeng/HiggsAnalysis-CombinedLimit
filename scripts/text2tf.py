@@ -221,23 +221,10 @@ print(np.max(np.abs(logkdown)))
 logkavg = 0.5*(logkup+logkdown)
 logkhalfdiff = 0.5*(logkup-logkdown)
 
-nexpnomv = np.sum(norm,axis=-1)
-
 #discard masked channels where not needed
 data_obs = data_obs[:nbinstotal-nbinsmasked]
-nexpnomv = nexpnomv[:nbinstotal-nbinsmasked]
 
-print("nbins = %d, ntotal = %e, npoi = %d, nsyst = %d" % (nexpnomv.shape[0], np.sum(nexpnomv), npoi, nsyst))
-
-
-#initial value for signal strenghts
-logrv = np.zeros([npoi]).astype(dtype)
-
-#initial value for nuisances
-thetav = np.zeros([nsyst]).astype(dtype)
-
-#combined initializer for all fit parameters
-logrthetav = np.concatenate((logrv,thetav),axis=0)
+print("nbins = %d, npoi = %d, nsyst = %d" % (data_obs.shape[0], npoi, nsyst))
 
 cprocs = tf.constant(procs,name="cprocs")
 csignals = tf.constant(signals,name="csignals")
@@ -247,11 +234,10 @@ cmaskedchans = tf.constant(maskedchans,name="cmaskedchans")
 #data
 #nobs = tf.placeholder(dtype, shape=data_obs.shape)
 nobs = tf.Variable(data_obs, trainable=False, name="nobs")
-theta0 = tf.Variable(np.zeros_like(thetav), trainable=False, name="theta0")
-nexpnom = tf.Variable(nexpnomv, trainable=False, name="nexpnom")
+theta0 = tf.Variable(tf.zeros([nsyst],dtype=dtype), trainable=False, name="theta0")
 
 #tf variable containing all fit parameters
-logrtheta = tf.Variable(logrthetav, name="logrtheta")
+logrtheta = tf.Variable(tf.zeros([npoi+nsyst],dtype=dtype), name="logrtheta")
 
 #split back into signal strengths and nuisances
 logr = logrtheta[:npoi]
@@ -294,6 +280,7 @@ nexp = tf.identity(nexp,name='nexp')
 nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
 lognexp = tf.log(nexpsafe)
 
+nexpnom = tf.Variable(nexp, trainable=False, name="nexpnom")
 nexpnomsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexpnom)
 lognexpnom = tf.log(nexpnomsafe)
 
@@ -320,6 +307,9 @@ pmaskedexp = tf.identity(pmaskedexp, name="pmaskedexp")
 
 maskedexp = tf.reduce_sum(pnormmasked, axis=-1)
 maskedexp = tf.identity(maskedexp,"maskedexp")
+
+pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=0)
+pmaskedexpnorm = tf.identity(maskedexp,"pmaskedexpnorm")
 
 basename = '.'.join(options.fileName.split('.')[:-1])
 tf.train.export_meta_graph(filename='%s.meta' % basename)
