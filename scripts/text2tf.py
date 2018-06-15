@@ -308,8 +308,11 @@ pmaskedexp = tf.identity(pmaskedexp, name="pmaskedexp")
 maskedexp = tf.reduce_sum(pnormmasked, axis=-1)
 maskedexp = tf.identity(maskedexp,"maskedexp")
 
-pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=0)
-pmaskedexpnorm = tf.identity(maskedexp,"pmaskedexpnorm")
+if nbinsmasked>0:
+  pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=0)
+else:
+  pmaskedexpnorm = pmaskedexp
+pmaskedexpnorm = tf.identity(pmaskedexpnorm,"pmaskedexpnorm")
 
 basename = '.'.join(options.fileName.split('.')[:-1])
 tf.train.export_meta_graph(filename='%s.meta' % basename)
