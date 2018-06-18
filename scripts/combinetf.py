@@ -56,8 +56,8 @@ variables = tf.global_variables()
 
 graph = tf.get_default_graph()
 l = graph.get_tensor_by_name("loss:0")
-logrtheta = filter(lambda x: x.name == 'logrtheta:0', variables)[0]
-logr = graph.get_tensor_by_name("logr:0")
+rtheta = filter(lambda x: x.name == 'rtheta:0', variables)[0]
+r = graph.get_tensor_by_name("r:0")
 theta = graph.get_tensor_by_name("theta:0")
 theta0 = filter(lambda x: x.name == 'theta0:0', variables)[0]
 nexp = graph.get_tensor_by_name("nexp:0")
@@ -72,29 +72,29 @@ csignals = graph.get_tensor_by_name("csignals:0")
 csysts = graph.get_tensor_by_name("csysts:0")
 cmaskedchans = graph.get_tensor_by_name("cmaskedchans:0")
 
-dtype = logrtheta.dtype.as_numpy_dtype
+dtype = rtheta.dtype.as_numpy_dtype
 npoi = csignals.shape[0]
 nsyst = csysts.shape[0]
 
 
-grads = tf.gradients(l,logrtheta)
+grads = tf.gradients(l,rtheta)
 grads = tf.identity(grads,"loss_grads")
 
 grad = grads[0]
 
 #uncertainty computation
-hess = tf.hessians(l,logrtheta)[0]
+hess = tf.hessians(l,rtheta)[0]
 hess = tf.identity(hess,name="loss_hessian")
 
 hessinv = tf.matrix_inverse(hess)
 
 
 l0 = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
-x0 = tf.Variable(np.zeros(logrtheta.shape,dtype=dtype),trainable=False)
+x0 = tf.Variable(np.zeros(rtheta.shape,dtype=dtype),trainable=False)
 a = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
-errdir = tf.Variable(np.zeros(logrtheta.shape,dtype=dtype),trainable=False)
+errdir = tf.Variable(np.zeros(rtheta.shape,dtype=dtype),trainable=False)
 
-errproj = -tf.reduce_sum((logrtheta-x0)*errdir,axis=0)
+errproj = -tf.reduce_sum((rtheta-x0)*errdir,axis=0)
 
 dxconstraint = a + errproj
 dlconstraint = (l - l0)
@@ -106,22 +106,19 @@ ub = np.concatenate((np.inf*np.ones([npoi],dtype=dtype),np.inf*np.ones([nsyst],d
 globalinit = tf.global_variables_initializer()
 nexpnomassign = tf.assign(nexpnom,nexp)
 asimovassign = tf.assign(nobs,nexp)
-#asimovrandomizestart = tf.assign(logrtheta,tf.contrib.distributions.MultivariateNormalFullCovariance(logrtheta,hessinv).sample())
-asimovrandomizestart = tf.assign(logrtheta,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(logrtheta,hessinv).sample(),lb,ub))
+asimovrandomizestart = tf.assign(rtheta,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(rtheta,hessinv).sample(),lb,ub))
 bootstrapassign = tf.assign(nobs,tf.random_poisson(nobs,shape=[],dtype=dtype))
 toyassign = tf.assign(nobs,tf.random_poisson(nexp,shape=[],dtype=dtype))
 frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=theta.shape,dtype=dtype))
-thetastartassign = tf.assign(logrtheta, tf.concat([logr,theta0],axis=0))
-bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=theta.shape,dtype=dtype)],axis=0))
+thetastartassign = tf.assign(rtheta, tf.concat([r,theta0],axis=0))
+bayesassign = tf.assign(rtheta, tf.concat([r,theta+tf.random_normal(shape=theta.shape,dtype=dtype)],axis=0))
 
 
 xtol = np.finfo(dtype).eps
 btol = 1e-8
-minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], var_to_bounds={logrtheta: (lb,ub)}, options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : btol})
-
-#minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
-minimizerscan = ScipyTROptimizerInterface(l, var_list = [logrtheta], equalities=[dxconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
-minimizerminos = ScipyTROptimizerInterface(errproj,var_list = [logrtheta], equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+minimizer = ScipyTROptimizerInterface(l, var_list = [rtheta], var_to_bounds={rtheta: (lb,ub)}, options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : btol})
+minimizerscan = ScipyTROptimizerInterface(l, var_list = [rtheta], equalities=[dxconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+minimizerminos = ScipyTROptimizerInterface(errproj,var_list = [rtheta], equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 
 #initialize tf session
 if options.nThreads>0:
@@ -132,10 +129,11 @@ else:
 sess = tf.Session(config=config)
 sess.run(globalinit)
 
-#logrthetav = np.concatenate((math.log(options.expectSignal)*np.ones([npoi],dtype=dtype), np.zeros([nsyst],dtype=dtype)), axis=0)
-logrthetav = np.concatenate((math.sqrt(options.expectSignal)*np.ones([npoi],dtype=dtype), np.zeros([nsyst],dtype=dtype)), axis=0)
+rthetav = np.concatenate((options.expectSignal*np.ones([npoi],dtype=dtype), np.zeros([nsyst],dtype=dtype)), axis=0)
 data_obs = sess.run(nobs)
 procs, signals, systs, maskedchans = sess.run([cprocs,csignals,csysts,cmaskedchans])
+signals = signals.tolist()
+systs = systs.tolist()
 
 pmaskedexpvals = sess.run(pmaskedexp)
 
@@ -170,14 +168,8 @@ tree.Branch('dnllval',tdnllval,'dnllval/F')
 tchisq = array('f',[0.])
 tree.Branch('chisq', tchisq, 'chisq/F')
 
-tchisqraw = array('f',[0.])
-tree.Branch('chisqraw', tchisqraw, 'chisqraw/F')
-
 tchisqpartial = array('f',[0.])
 tree.Branch('chisqpartial', tchisqpartial, 'chisqpartial/F')
-
-tchisqpartialraw = array('f',[0.])
-tree.Branch('chisqpartialraw', tchisqpartialraw, 'chisqpartialraw/F')
 
 tndof = array('i',[0])
 tree.Branch('ndof',tndof,'ndof/I')
@@ -263,7 +255,7 @@ sess.run(nexpnomassign)
 if options.toys>0 and options.toysFrequentist and not options.bypassFrequentistFit:  
   sess.run(nexpnomassign)
   ret = minimizer.minimize(sess)
-  logrthetav = sess.run(logrtheta)
+  rthetav = sess.run(rtheta)
 
 def printfunc(l):
   print(l)
@@ -276,8 +268,8 @@ for itoy in range(ntoys):
 
   #reset all variables
   sess.run(globalinit)
-  logrtheta.load(logrthetav,sess)
-  xvalgen = logrthetav
+  rtheta.load(rthetav,sess)
+  xvalgen = rthetav
     
   dofit = True
   
@@ -306,7 +298,7 @@ for itoy in range(ntoys):
       sess.run(bootstrapassign)
       xvalgen = -1.*np.ones_like(xvalgen)
     else:
-      xvalgen = sess.run(logrtheta)
+      xvalgen = sess.run(rtheta)
       #randomize from expectation
       sess.run(toyassign)      
 
@@ -317,13 +309,13 @@ for itoy in range(ntoys):
   if dofit:
     ret = minimizer.minimize(sess)
 
-  xval, nllval, gradval, hessval = sess.run([logrtheta,l,grad,hess])
+  xval, nllval, gradval, hessval = sess.run([rtheta,l,grad,hess])
   dnllval = 0.
 
   isposdef = np.all(np.greater_equal(np.linalg.eigvalsh(hessval),0.))
     
   #get fit values
-  logrvals = xval[:npoi]
+  rvals = xval[:npoi]
   thetavals = xval[npoi:]  
   
   theta0vals = sess.run(theta0)
@@ -332,47 +324,25 @@ for itoy in range(ntoys):
   pmaskedexpnormvals = sess.run(pmaskedexpnorm)
   maskedexpvals = sess.run(maskedexp)
   
-  #transformation from logr to r
-  #rvals = np.exp(logrvals)
-  #rvals = np.square(logrvals)
-  rvals = logrvals
-  jac = np.diagflat(np.concatenate((2.*logrvals,np.ones_like(thetavals)),axis=0))
-  #jac = np.diagflat(np.concatenate((rvals,np.ones_like(thetavals)),axis=0))
-  jact = np.transpose(jac)
-  
-  #invjac = np.linalg.inv(jac)
-  #invjact = np.transpose(invjac)
-  #hessvaltrans = np.matmul(invjact,np.matmul(hessval,invjac))
   hessvaltrans = hessval
   
   rvalsgen = np.exp(xvalgen[:npoi])
   thetavalsgen = xvalgen[npoi:]
   xvalgentrans = np.concatenate((rvalsgen,thetavalsgen),axis=0)
-  
-  xvaltrans = np.concatenate((rvals,thetavals),axis=0)
-  
+    
   dx = xvalgen - xval
   dx = np.reshape(dx,[-1,1])
   
-  dxtrans = xvalgentrans - xvaltrans
-  dxtrans = np.reshape(dxtrans,[-1,1])
-  
-  chisqraw = np.matmul(np.transpose(dx),np.matmul(hessval,dx))
-  chisq = np.matmul(np.transpose(dxtrans),np.matmul(hessvaltrans,dxtrans))
-    
-  chisqpartialraw = np.matmul(np.transpose(dx[:npoi]),np.matmul(hessval[:npoi,:npoi],dx[:npoi]))
-  chisqpartial = np.matmul(np.transpose(dxtrans[:npoi]),np.matmul(hessvaltrans[:npoi,:npoi],dxtrans[:npoi]))
+  chisq = np.matmul(np.transpose(dx),np.matmul(hessval,dx))    
+  chisqpartial = np.matmul(np.transpose(dx[:npoi]),np.matmul(hessval[:npoi,:npoi],dx[:npoi]))
       
   try:        
     invhess = np.linalg.inv(hessval)
     edmval = 0.5*np.matmul(np.matmul(np.transpose(gradval),invhess),gradval)
     
     rawsigmasv = np.sqrt(np.diag(invhess))
+    sigmasv = rawsigmasv
     
-    #transformation from logr to r for covariance matrix
-    #invhesstrans = np.matmul(jac,np.matmul(invhess,jact))
-    invhesstrans = invhess
-    sigmasv = np.sqrt(np.diag(invhesstrans))
     errstatus = 0
     if np.any(np.isnan(sigmasv)):
       errstatus = 1
@@ -394,10 +364,8 @@ for itoy in range(ntoys):
   for var in options.minos:
     print("running minos-like algorithm for %s" % var)
     if var in signals:
-      isSig = True
       erridx = signals.index(var)
     elif var in systs:
-      isSig = False
       erridx = npoi + systs.index(var)
     else:
       raise Exception()
@@ -405,26 +373,22 @@ for itoy in range(ntoys):
     l0.load(nllval+0.5,sess)
     x0.load(xval,sess)
 
-    errdirv = np.zeros_like(logrthetav)
+    errdirv = np.zeros_like(rthetav)
     
     errdirv[erridx] = 1./rawsigmasv[erridx]
     errdir.load(errdirv,sess)
-    logrtheta.load(xval + rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
+    rtheta.load(xval + rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
     minimizerminos.minimize(sess)
-    xvalminosup, nllvalminosup = sess.run([logrtheta,l])
+    xvalminosup, nllvalminosup = sess.run([rtheta,l])
     dxvalup = xvalminosup[erridx]-xval[erridx]
-    if isSig:
-      dxvalup = math.exp(xvalminosup[erridx]) - math.exp(xval[erridx])
     minoserrsup[erridx] = dxvalup
 
     errdirv[erridx] = -1./rawsigmasv[erridx]
     errdir.load(errdirv,sess)
-    logrtheta.load(xval + rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
+    rtheta.load(xval + rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
     minimizerminos.minimize(sess)
-    xvalminosdown, nllvalminosdown = sess.run([logrtheta,l])
+    xvalminosdown, nllvalminosdown = sess.run([rtheta,l])
     dxvaldown = -(xvalminosdown[erridx]-xval[erridx])
-    if isSig:
-      dxvaldown = -(math.exp(xvalminosdown[erridx]) - math.exp(xval[erridx]))
     minoserrsdown[erridx] = dxvaldown
     
   tstatus[0] = status
@@ -434,9 +398,7 @@ for itoy in range(ntoys):
   tdnllval[0] = dnllval
   tscanidx[0] = -1
   tchisq[0] = chisq
-  tchisqraw[0] = chisqraw
   tchisqpartial[0] = chisqpartial
-  tchisqpartialraw[0] = chisqpartialraw
   tndof[0] = xval.shape[0]
   tndofpartial[0] = npoi
   
@@ -456,7 +418,7 @@ for itoy in range(ntoys):
     tsigminosdown[0] = minosdown
     tsiggenval[0] = siggenval
     if itoy==0:
-      print('%s = %f +- %f (+%f -%f)' % (sig,sigval,sigma,minosup,minosdown))
+      print('%s = %e +- %f (+%f -%f)' % (sig,sigval,sigma,minosup,minosdown))
 
   for proc,pmaskedexpval,pmaskedexpnormval, tpmaskedexp, tpmaskedexpnorm in zip(procs,pmaskedexpvals,pmaskedexpnormvals,tpmaskedexps,tpmaskedexpnorms):
     tpmaskedexp[0] = pmaskedexpval
@@ -490,7 +452,7 @@ for itoy in range(ntoys):
     
     x0.load(xval,sess)
     
-    errdirv = np.zeros_like(logrthetav)
+    errdirv = np.zeros_like(rthetav)
     errdirv[erridx] = 1./rawsigmasv[erridx]
     errdir.load(errdirv,sess)
         
@@ -498,7 +460,7 @@ for itoy in range(ntoys):
     signs = [1.,-1.]
     
     for sign in signs:
-      logrtheta.load(xval,sess)
+      rtheta.load(xval,sess)
       for absdsig in dsigs:
         dsig = sign*absdsig
         
@@ -508,15 +470,12 @@ for itoy in range(ntoys):
         a.load(dsig,sess)
         minimizerscan.minimize(sess)
     
-        xvalscan, nllvalscan = sess.run([logrtheta,l])
+        xvalscan, nllvalscan = sess.run([rtheta,l])
         dnllvalscan = nllvalscan - nllval
           
         #get fit values
-        logrvals = xvalscan[:npoi]
+        rvals = xvalscan[:npoi]
         thetavals = xvalscan[npoi:]  
-        
-        #transformation from logr to r
-        rvals = np.exp(logrvals)
         
         pmaskedexpvals = sess.run(pmaskedexp)
         pmaskedexpnormvals = sess.run(pmaskedexpnorm)
@@ -536,7 +495,7 @@ for itoy in range(ntoys):
         for maskedchan,maskedexpval,tmaskedexp in zip(maskedchans,maskedexpvals,tmaskedexps):
           tmaskedexp[0] = maskedexpval
         
-        for syst,thetaval,theta0val,sigma,minosup,minosdown,tthetaval,ttheta0val,tthetaerr,tthetaminosup,tthetaminosdown in zip(DC.systs,thetavals,theta0vals,thetasigmasv,thetaminosups,thetaminosdowns, tthetavals,ttheta0vals,tthetaerrs,tthetaminosups,tthetaminosdowns):
+        for syst,thetaval,theta0val,sigma,minosup,minosdown,tthetaval,ttheta0val,tthetaerr,tthetaminosup,tthetaminosdown in zip(systs,thetavals,theta0vals,thetasigmasv,thetaminosups,thetaminosdowns, tthetavals,ttheta0vals,tthetaerrs,tthetaminosups,tthetaminosdowns):
           tthetaval[0] = thetaval
 
         tree.Fill()

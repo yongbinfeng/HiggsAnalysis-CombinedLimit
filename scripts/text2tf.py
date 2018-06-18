@@ -59,7 +59,6 @@ print(options)
 
 nproc = len(DC.processes)
 nsyst = len(DC.systs)
-npoi = len(DC.signals)
 
 dtype = 'float64'
 
@@ -81,6 +80,8 @@ if not options.freezePOIs:
   for proc in DC.processes:
     if DC.isSignal[proc]:
       signals.append(proc)
+      
+npoi = len(signals)
       
 #list of systematic uncertainties (nuisances)
 systs = []
@@ -232,25 +233,22 @@ csysts = tf.constant(systs,name="csysts")
 cmaskedchans = tf.constant(maskedchans,name="cmaskedchans")
 
 #data
-#nobs = tf.placeholder(dtype, shape=data_obs.shape)
 nobs = tf.Variable(data_obs, trainable=False, name="nobs")
 theta0 = tf.Variable(tf.zeros([nsyst],dtype=dtype), trainable=False, name="theta0")
 
 #tf variable containing all fit parameters
-#logrtheta = tf.Variable(tf.zeros([npoi+nsyst],dtype=dtype), name="logrtheta")
-logrtheta = tf.Variable(tf.concat([tf.ones([npoi],dtype=dtype),tf.zeros([nsyst],dtype=dtype)],axis=0), name="logrtheta")
+rtheta = tf.Variable(tf.concat([tf.ones([npoi],dtype=dtype),tf.zeros([nsyst],dtype=dtype)],axis=0), name="rtheta")
 
 #split back into signal strengths and nuisances
-logr = logrtheta[:npoi]
-theta = logrtheta[npoi:]
+r = rtheta[:npoi]
+theta = rtheta[npoi:]
 
-logr = tf.identity(logr,name="logr")
+r = tf.identity(r,name="r")
 theta = tf.identity(theta,name="theta")
 
 #vector encoding effect of signal strengths
-logrnorm = tf.concat([logr,tf.zeros([nproc-npoi],dtype=dtype)],axis=0)
-#rnorm = tf.square(logrnorm)
-rnorm = logrnorm
+rnorm = tf.concat([r,tf.ones([nproc-npoi],dtype=dtype)],axis=0)
+rnorm = tf.reshape(rnorm,[1,-1])
 
 #interpolation for asymmetric log-normal
 twox = 2.*theta
@@ -261,14 +259,10 @@ logk = logkavg + alpha*logkhalfdiff
 
 #matrix encoding effect of nuisance parameters
 logsnorm = tf.reduce_sum(logk*theta,axis=-1)
-
-#logrsnorm = logrnorm + logsnorm
-#rsnorm = tf.exp(logrsnorm)
 snorm = tf.exp(logsnorm)
 
 #final expected yields per-bin including effect of signal
 #strengths and nuisance parmeters
-#pnormfull = rsnorm*norm
 pnormfull = rnorm*snorm*norm
 if nbinsmasked>0:
   pnorm = pnormfull[:nbinstotal-nbinsmasked]
