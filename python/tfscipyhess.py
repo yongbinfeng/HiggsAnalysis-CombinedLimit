@@ -32,9 +32,9 @@ class ScipyTROptimizerInterface(ExternalOptimizerInterface):
 
     constraints = []
     for func, grad_func in zip(equality_funcs, equality_grad_funcs):
-      constraints.append(NonlinearConstraint(func, np.zeros_like(initial_val),np.zeros_like(initial_val),jac = grad_func, hess=SR1()))
+      constraints.append(NonlinearConstraint(func, 0. ,0., jac = grad_func, hess=SR1()))
     for func, grad_func in zip(inequality_funcs, inequality_grad_funcs):
-      constraints.append(NonlinearConstraint(func, np.zeros_like(initial_val),np.inf*np.ones_like(initial_val),jac = grad_func, hess=SR1()))
+      constraints.append(NonlinearConstraint(func, 0., np.inf, jac = grad_func, hess=SR1()))
 
     import scipy.optimize  # pylint: disable=g-import-not-at-top
 
