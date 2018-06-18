@@ -31,10 +31,14 @@ class ScipyTROptimizerInterface(ExternalOptimizerInterface):
     hess = optimizer_kwargs.pop('hess', SR1())
 
     constraints = []
-    for func, grad_func in zip(equality_funcs, equality_grad_funcs):
-      constraints.append(NonlinearConstraint(func, 0. ,0., jac = grad_func, hess=SR1()))
-    for func, grad_func in zip(inequality_funcs, inequality_grad_funcs):
-      constraints.append(NonlinearConstraint(func, 0., np.inf, jac = grad_func, hess=SR1()))
+    for func, grad_func, tensor in zip(equality_funcs, equality_grad_funcs,self._equalities):
+      lb = np.zeros(tensor.shape,dtype=initial_val.dtype)
+      ub = lb
+      constraints.append(NonlinearConstraint(func, lb, ub, jac = grad_func, hess=SR1()))
+    for func, grad_func, tensor in zip(inequality_funcs, inequality_grad_funcs,self._inequalities):
+      lb = np.zeros(tensor.shape,dtype=initial_val.dtype)
+      ub = np.inf*np.ones(tensor.shape,dtype=initial_val.dtype)
+      constraints.append(NonlinearConstraint(func, lb, ub, jac = grad_func, hess=SR1()))
 
     import scipy.optimize  # pylint: disable=g-import-not-at-top
 
