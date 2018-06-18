@@ -12,8 +12,7 @@ from tensorflow.python.ops import variables
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.contrib.opt import ExternalOptimizerInterface
 
-from scipy.optimize import SR1
-from scipy.optimize import NonlinearConstraint
+from scipy.optimize import SR1, LinearConstraint, NonlinearConstraint, Bounds
 
 
 __all__ = ['ScipyTROptimizerInterface']
@@ -33,11 +32,21 @@ class ScipyTROptimizerInterface(ExternalOptimizerInterface):
 
     constraints = []
     for func, grad_func in zip(equality_funcs, equality_grad_funcs):
-      constraints.append(NonlinearConstraint(func, 0.,0.,jac = grad_func, hess=SR1()))
+      constraints.append(NonlinearConstraint(func, np.zeros_like(initial_val),np.zeros_like(initial_val),jac = grad_func, hess=SR1()))
     for func, grad_func in zip(inequality_funcs, inequality_grad_funcs):
-      constraints.append(NonlinearConstraint(func, 0.,np.inf,jac = grad_func, hess=SR1()))
+      constraints.append(NonlinearConstraint(func, np.zeros_like(initial_val),np.inf*np.ones_like(initial_val),jac = grad_func, hess=SR1()))
 
     import scipy.optimize  # pylint: disable=g-import-not-at-top
+
+    if packed_bounds != None:
+      lb = np.zeros_like(initial_val)
+      ub = np.zeros_like(initial_val)
+      for ival,(lbval,ubval) in enumerate(packed_bounds):
+        lb[ival] = lbval
+        ub[ival] = ubval
+      isnull = np.all(np.equal(lb,-np.inf)) and np.all(np.equal(ub,np.inf))
+      if not isnull:
+        constraints.append(LinearConstraint(np.eye(initial_val.shape[0],dtype=initial_val.dtype),lb,ub,keep_feasible=True))
 
     minimize_args = [loss_grad_func, initial_val]
     minimize_kwargs = {
@@ -46,7 +55,7 @@ class ScipyTROptimizerInterface(ExternalOptimizerInterface):
         'callback': None,
         'method': method,
         'constraints': constraints,
-        'bounds': packed_bounds,
+        'bounds': None,
     }
 
     for kwarg in minimize_kwargs:
