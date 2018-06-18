@@ -237,7 +237,8 @@ nobs = tf.Variable(data_obs, trainable=False, name="nobs")
 theta0 = tf.Variable(tf.zeros([nsyst],dtype=dtype), trainable=False, name="theta0")
 
 #tf variable containing all fit parameters
-logrtheta = tf.Variable(tf.zeros([npoi+nsyst],dtype=dtype), name="logrtheta")
+#logrtheta = tf.Variable(tf.zeros([npoi+nsyst],dtype=dtype), name="logrtheta")
+logrtheta = tf.Variable(tf.concat([tf.ones([npoi],dtype=dtype),tf.zeros([nsyst],dtype=dtype)],axis=0), name="logrtheta")
 
 #split back into signal strengths and nuisances
 logr = logrtheta[:npoi]
@@ -248,6 +249,8 @@ theta = tf.identity(theta,name="theta")
 
 #vector encoding effect of signal strengths
 logrnorm = tf.concat([logr,tf.zeros([nproc-npoi],dtype=dtype)],axis=0)
+#rnorm = tf.square(logrnorm)
+rnorm = logrnorm
 
 #interpolation for asymmetric log-normal
 twox = 2.*theta
@@ -259,12 +262,14 @@ logk = logkavg + alpha*logkhalfdiff
 #matrix encoding effect of nuisance parameters
 logsnorm = tf.reduce_sum(logk*theta,axis=-1)
 
-logrsnorm = logrnorm + logsnorm
-rsnorm = tf.exp(logrsnorm)
+#logrsnorm = logrnorm + logsnorm
+#rsnorm = tf.exp(logrsnorm)
+snorm = tf.exp(logsnorm)
 
 #final expected yields per-bin including effect of signal
 #strengths and nuisance parmeters
-pnormfull = rsnorm*norm
+#pnormfull = rsnorm*norm
+pnormfull = rnorm*snorm*norm
 if nbinsmasked>0:
   pnorm = pnormfull[:nbinstotal-nbinsmasked]
 else:

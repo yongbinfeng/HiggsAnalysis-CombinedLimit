@@ -99,18 +99,27 @@ errproj = -tf.reduce_sum((logrtheta-x0)*errdir,axis=0)
 dxconstraint = a + errproj
 dlconstraint = (l - l0)
 
+lb = np.concatenate((0.*np.ones([npoi],dtype=dtype),-np.inf*np.ones([nsyst],dtype=dtype)),axis=0)
+ub = np.concatenate((np.inf*np.ones([npoi],dtype=dtype),np.inf*np.ones([nsyst],dtype=dtype)),axis=0)
+
+
 globalinit = tf.global_variables_initializer()
 nexpnomassign = tf.assign(nexpnom,nexp)
 asimovassign = tf.assign(nobs,nexp)
-asimovrandomizestart = tf.assign(logrtheta,tf.contrib.distributions.MultivariateNormalFullCovariance(logrtheta,hessinv).sample())
+#asimovrandomizestart = tf.assign(logrtheta,tf.contrib.distributions.MultivariateNormalFullCovariance(logrtheta,hessinv).sample())
+asimovrandomizestart = tf.assign(logrtheta,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(logrtheta,hessinv).sample(),lb,ub))
 bootstrapassign = tf.assign(nobs,tf.random_poisson(nobs,shape=[],dtype=dtype))
 toyassign = tf.assign(nobs,tf.random_poisson(nexp,shape=[],dtype=dtype))
 frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=theta.shape,dtype=dtype))
 thetastartassign = tf.assign(logrtheta, tf.concat([logr,theta0],axis=0))
 bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=theta.shape,dtype=dtype)],axis=0))
 
+
 xtol = np.finfo(dtype).eps
-minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+btol = 1e-8
+minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], var_to_bounds={logrtheta: (lb,ub)}, options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : btol})
+
+#minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 minimizerscan = ScipyTROptimizerInterface(l, var_list = [logrtheta], equalities=[dxconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 minimizerminos = ScipyTROptimizerInterface(errproj,var_list = [logrtheta], equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 
@@ -123,7 +132,8 @@ else:
 sess = tf.Session(config=config)
 sess.run(globalinit)
 
-logrthetav = np.concatenate((math.log(options.expectSignal)*np.ones([npoi],dtype=dtype), np.zeros([nsyst],dtype=dtype)), axis=0)
+#logrthetav = np.concatenate((math.log(options.expectSignal)*np.ones([npoi],dtype=dtype), np.zeros([nsyst],dtype=dtype)), axis=0)
+logrthetav = np.concatenate((math.sqrt(options.expectSignal)*np.ones([npoi],dtype=dtype), np.zeros([nsyst],dtype=dtype)), axis=0)
 data_obs = sess.run(nobs)
 procs, signals, systs, maskedchans = sess.run([cprocs,csignals,csysts,cmaskedchans])
 
@@ -323,13 +333,17 @@ for itoy in range(ntoys):
   maskedexpvals = sess.run(maskedexp)
   
   #transformation from logr to r
-  rvals = np.exp(logrvals)
-  jac = np.diagflat(np.concatenate((rvals,np.ones_like(thetavals)),axis=0))
+  #rvals = np.exp(logrvals)
+  #rvals = np.square(logrvals)
+  rvals = logrvals
+  jac = np.diagflat(np.concatenate((2.*logrvals,np.ones_like(thetavals)),axis=0))
+  #jac = np.diagflat(np.concatenate((rvals,np.ones_like(thetavals)),axis=0))
   jact = np.transpose(jac)
   
-  invjac = np.linalg.inv(jac)
-  invjact = np.transpose(invjac)
-  hessvaltrans = np.matmul(invjact,np.matmul(hessval,invjac))
+  #invjac = np.linalg.inv(jac)
+  #invjact = np.transpose(invjac)
+  #hessvaltrans = np.matmul(invjact,np.matmul(hessval,invjac))
+  hessvaltrans = hessval
   
   rvalsgen = np.exp(xvalgen[:npoi])
   thetavalsgen = xvalgen[npoi:]
@@ -356,7 +370,8 @@ for itoy in range(ntoys):
     rawsigmasv = np.sqrt(np.diag(invhess))
     
     #transformation from logr to r for covariance matrix
-    invhesstrans = np.matmul(jac,np.matmul(invhess,jact))
+    #invhesstrans = np.matmul(jac,np.matmul(invhess,jact))
+    invhesstrans = invhess
     sigmasv = np.sqrt(np.diag(invhesstrans))
     errstatus = 0
     if np.any(np.isnan(sigmasv)):
@@ -458,7 +473,7 @@ for itoy in range(ntoys):
     tthetaminosdown[0] = minosdown
     tthetagenval[0] = thetagenval
     if itoy==0:
-      print('%s = %f +- %f (+%f -%f) (%s_In = %f)' % (syst, thetaval, sigma, minosup,minosdown,syst[0],theta0val))
+      print('%s = %f +- %f (+%f -%f) (%s_In = %f)' % (syst, thetaval, sigma, minosup,minosdown,syst,theta0val))
     
   tree.Fill()
   
