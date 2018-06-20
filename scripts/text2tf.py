@@ -32,7 +32,10 @@ parser.add_option("-P", "--physics-model", dest="physModel", default="HiggsAnaly
 parser.add_option("--PO", "--physics-option", dest="physOpt", default=[],  type="string", action="append", help="Pass a given option to the physics model (can specify multiple times)")
 parser.add_option("", "--dump-datacard", dest="dumpCard", default=False, action='store_true',  help="Print to screen the DataCard as a python config and exit")
 parser.add_option("","--allowNegativeExpectation", default=False, action='store_true', help="allow negative expectation")
-parser.add_option("","--freezePOIs", default=False, action='store_true', help="freeze POIs")
+parser.add_option("","--POIMode", default="mu",type="string", help="mode for POI's")
+parser.add_option("","--POIMin", default=0., type=float, help="mode for POI's")
+parser.add_option("","--POIMax", default=np.inf, type=float, help="mode for POI's")
+parser.add_option("","--POIDefault", default=1., type=float, help="mode for POI's")
 parser.add_option("","--maskedChan", default=[], type="string",action="append", help="channels to be masked in likelihood but propagated through for later storage/analysis")
 (options, args) = parser.parse_args()
 
@@ -58,6 +61,7 @@ if options.dumpCard:
 print(options)
 
 nproc = len(DC.processes)
+nsignals = len(DC.signals)
 nsyst = len(DC.systs)
 
 dtype = 'float64'
@@ -76,12 +80,9 @@ for proc in DC.processes:
 
 #list of signals preserving datacard order
 signals = []
-if not options.freezePOIs:
-  for proc in DC.processes:
-    if DC.isSignal[proc]:
-      signals.append(proc)
-      
-npoi = len(signals)
+for proc in DC.processes:
+  if DC.isSignal[proc]:
+    signals.append(proc)
       
 #list of systematic uncertainties (nuisances)
 systs = []
@@ -222,8 +223,42 @@ print(np.max(np.abs(logkdown)))
 logkavg = 0.5*(logkup+logkdown)
 logkhalfdiff = 0.5*(logkup-logkdown)
 
-#discard masked channels where not needed
-data_obs = data_obs[:nbinstotal-nbinsmasked]
+if options.POIMin == -np.inf and options.POIMax == np.inf:
+  boundmode = 0
+elif options.POIMax == np.inf:
+  boundmode = 1
+else:
+  raise Exception("unsupported combination of bounds for now")
+
+pois = []  
+  
+if options.POImode in ["mu","masked","maskednorm"]:
+  npoi = nsignals
+  for signal in signals:
+    pois.append("%s_%s" % (signal,options.POIMode))
+  if options.POImode == "mu"
+    poidefault = options.POIDefault*np.ones([npoi],dtype=dtype)
+  elif options.POImode in ["masked", "maskednorm"]:
+    normmasked = norm[nbinstotal-nbinsmasked:]
+    maskedexp = np.sum(normmasked, axis=0)
+    if options.POImode == "masked":
+      poidefault = options.POIDefault*maskedexp
+    elif options.POImode == "maskednorm":
+      maskedexptot = np.sum(normmasked, axis=-1)
+      maskedexpnorm = np.sum(normmasked/maskedexptot, axis=0)    
+      poidefault = options.POIDefault*maskedexpnorm
+elif options.POImode == "none"
+  npoi = 0
+else:
+  raise Exception("unsupported POIMode")
+
+nparm = npoi + nsyst
+parms = pois + systs
+
+if boundmode==0:
+  xdefault = poidefault
+elif boundmode==1:
+  xdefault = np.sqrt(poidefault - options.POIMin)
 
 print("nbins = %d, npoi = %d, nsyst = %d" % (data_obs.shape[0], npoi, nsyst))
 
@@ -231,24 +266,36 @@ cprocs = tf.constant(procs,name="cprocs")
 csignals = tf.constant(signals,name="csignals")
 csysts = tf.constant(systs,name="csysts")
 cmaskedchans = tf.constant(maskedchans,name="cmaskedchans")
+cpois = tf.constant(pois,name="pois")
 
 #data
 nobs = tf.Variable(data_obs, trainable=False, name="nobs")
 theta0 = tf.Variable(tf.zeros([nsyst],dtype=dtype), trainable=False, name="theta0")
 
 #tf variable containing all fit parameters
-rtheta = tf.Variable(tf.concat([tf.ones([npoi],dtype=dtype),tf.zeros([nsyst],dtype=dtype)],axis=0), name="rtheta")
 
-#split back into signal strengths and nuisances
-r = rtheta[:npoi]
-theta = rtheta[npoi:]
+parmvar = tf.Variable(tf.concat([xdefault,tf.zeros([nsyst],dtype=dtype)], axis=0), name="parms")
 
-r = tf.identity(r,name="r")
-theta = tf.identity(theta,name="theta")
+x = parmvar[:npoi]
+theta = parmvar[npoi:]
 
-#vector encoding effect of signal strengths
-rnorm = tf.concat([r,tf.ones([nproc-npoi],dtype=dtype)],axis=0)
-rnorm = tf.reshape(rnorm,[1,-1])
+if boundmode == 0:
+  poi = x
+elif boundmode == 1:
+  poi = options.POIMin + tf.square(x)
+
+if boundmode == 0:
+  poitheta = parmvar
+else:
+  #TODO hack needed to make poitheta a dependency in the graph for hessian computation
+  #could be avoided with more flexible hessian function
+  poitheta = tf.concat([poi,theta],axis=0)
+  poi = poitheta[:npoi]
+  theta = poitheta[npoi:]
+  
+poitheta = tf.identify(poitheta, name="poitheta")
+poi = tf.identity(poi, name="poi")
+theta = tf.identify(theta, name="theta")
 
 #interpolation for asymmetric log-normal
 twox = 2.*theta
@@ -261,17 +308,41 @@ logk = logkavg + alpha*logkhalfdiff
 logsnorm = tf.reduce_sum(logk*theta,axis=-1)
 snorm = tf.exp(logsnorm)
 
+#per-bin including effect of nuisance parameters (unity signal-strengths)
+nnormfull = snorm*norm
+
+if nbinsmasked>0:
+  nnorm = nnormfull[:nbinstotal-nbinsmasked]
+else:
+  nnorm = nnormfull
+
+#vector encoding effect of signal strengths
+if options.POImode == "mu":
+  r = poi
+elif options.POImode in ["masked", "maskednorm"]:
+  if nbinsmasked==0:
+    raise Exception("this does not make sense without masked channels")
+  nnormmasked = nnormfull[nbinstotal-nbinsmasked:]
+  nmaskedexp = tf.reduce_sum(nnormmasked, axis=0)
+  if options.POImode == "masked":
+    r = poi/nmaskedexp
+  elif options.POImode == "maskednorm":
+    nmaskedexptot = tf.reduce_sum(nnormmasked, axis=-1)
+    nmaskedexpnorm = tf.reduce_sum(nnormmasked/nmaskedexptot, axis=0)    
+    r = poi/nmaskedexpnorm
+elif options.POImode == "none"
+  r = tf.ones([nsignal],dtype=dtype)
+
+rnorm = tf.concat([r,tf.ones([nproc-nsignal],dtype=dtype)],axis=0)
+rnorm = tf.reshape(rnorm,[1,-1])
+
 #final expected yields per-bin including effect of signal
 #strengths and nuisance parmeters
-pnormfull = rnorm*snorm*norm
+pnormfull = rnorm*nnorm
 if nbinsmasked>0:
   pnorm = pnormfull[:nbinstotal-nbinsmasked]
 else:
   pnorm = pnormfull
-  
-print(pnorm.shape)
-  
-pnormmasked = pnormfull[nbinstotal-nbinsmasked:]
   
 nexp = tf.reduce_sum(pnorm,axis=-1)
 nexp = tf.identity(nexp,name='nexp')
@@ -282,7 +353,6 @@ lognexp = tf.log(nexpsafe)
 nexpnom = tf.Variable(nexp, trainable=False, name="nexpnom")
 nexpnomsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexpnom)
 lognexpnom = tf.log(nexpnomsafe)
-
 
 #final likelihood computation
 
@@ -301,6 +371,7 @@ l = tf.identity(l,name="loss")
 lfull = lnfull + lc
 lfull = tf.identity(lfull,name="lossfull")
 
+pnormmasked = pnormfull[nbinstotal-nbinsmasked:]
 pmaskedexp = tf.reduce_sum(pnormmasked, axis=0)
 pmaskedexp = tf.identity(pmaskedexp, name="pmaskedexp")
 

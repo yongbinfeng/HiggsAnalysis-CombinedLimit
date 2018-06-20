@@ -97,7 +97,9 @@ errdir = tf.Variable(np.zeros(rtheta.shape,dtype=dtype),trainable=False)
 errproj = -tf.reduce_sum((rtheta-x0)*errdir,axis=0)
 
 dxconstraint = a + errproj
-dlconstraint = (l - l0)
+dlconstraint = -(l - l0)
+#gconstraint = grad - tf.reduce_sum(grad*errdir,axis=0)/tf.sqrt(tf.reduce_sum(tf.square(errdir),axis=0))
+gconstraint = 1. - tf.reduce_sum(grad*errdir,axis=0)/tf.sqrt(tf.reduce_sum(tf.square(errdir),axis=0))/tf.sqrt(tf.reduce_sum(tf.square(grad),axis=0))
 
 lb = np.concatenate((0.*np.ones([npoi],dtype=dtype),-np.inf*np.ones([nsyst],dtype=dtype)),axis=0)
 ub = np.concatenate((np.inf*np.ones([npoi],dtype=dtype),np.inf*np.ones([nsyst],dtype=dtype)),axis=0)
@@ -117,8 +119,15 @@ bayesassign = tf.assign(rtheta, tf.concat([r,theta+tf.random_normal(shape=theta.
 xtol = np.finfo(dtype).eps
 btol = 1e-8
 minimizer = ScipyTROptimizerInterface(l, var_list = [rtheta], var_to_bounds={rtheta: (lb,ub)}, options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : btol})
-minimizerscan = ScipyTROptimizerInterface(l, var_list = [rtheta], equalities=[dxconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
-minimizerminos = ScipyTROptimizerInterface(errproj,var_list = [rtheta], equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+minimizerscan = ScipyTROptimizerInterface(l, var_list = [rtheta], var_to_bounds={rtheta: (lb,ub)},  equalities=[dxconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : btol})
+#minimizerminos = ScipyTROptimizerInterface(errproj,var_list = [rtheta], inequalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+#minimizerminos = ScipyTROptimizerInterface(l,var_list = [rtheta], equalities=[gconstraint], inequalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+#minimizerminos = ScipyTROptimizerInterface(errproj,var_list = [rtheta], var_to_bounds={rtheta: (lb,ub)}, equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.}, hess = lambda x : np.zeros(hess.shape,dtype=dtype))
+minimizerminos = ScipyTROptimizerInterface(errproj,var_list = [rtheta], var_to_bounds={rtheta: (lb,ub)}, equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : btol,})
+
+#minimizerminos = ScipyTROptimizerInterface(tf.zeros([],dtype=dtype),var_list = [rtheta], var_to_bounds={rtheta: (lb,ub)}, equalities=[dlconstraint,gconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : btol})
+
+
 
 #initialize tf session
 if options.nThreads>0:
@@ -377,7 +386,11 @@ for itoy in range(ntoys):
     
     errdirv[erridx] = 1./rawsigmasv[erridx]
     errdir.load(errdirv,sess)
-    rtheta.load(xval + rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
+    rtheta.load(xval + 1.*rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
+    a.load(1.,sess)
+    minimizerscan.minimize(sess)
+    #rtheta.load(xval,sess)
+    #minimizerminosalt.minimize(sess)
     minimizerminos.minimize(sess)
     xvalminosup, nllvalminosup = sess.run([rtheta,l])
     dxvalup = xvalminosup[erridx]-xval[erridx]
@@ -385,7 +398,11 @@ for itoy in range(ntoys):
 
     errdirv[erridx] = -1./rawsigmasv[erridx]
     errdir.load(errdirv,sess)
-    rtheta.load(xval + rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
+    rtheta.load(xval + 1.*rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
+    #rtheta.load(xval,sess)
+    a.load(1.,sess)
+    minimizerscan.minimize(sess)
+    #minimizerminosalt.minimize(sess)
     minimizerminos.minimize(sess)
     xvalminosdown, nllvalminosdown = sess.run([rtheta,l])
     dxvaldown = -(xvalminosdown[erridx]-xval[erridx])

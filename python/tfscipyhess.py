@@ -38,7 +38,7 @@ class ScipyTROptimizerInterface(ExternalOptimizerInterface):
     for func, grad_func, tensor in zip(inequality_funcs, inequality_grad_funcs,self._inequalities):
       lb = np.zeros(tensor.shape,dtype=initial_val.dtype)
       ub = np.inf*np.ones(tensor.shape,dtype=initial_val.dtype)
-      constraints.append(NonlinearConstraint(func, lb, ub, jac = grad_func, hess=SR1()))
+      constraints.append(NonlinearConstraint(func, lb, ub, jac = grad_func, hess=SR1(),keep_feasible=False))
 
     import scipy.optimize  # pylint: disable=g-import-not-at-top
 
