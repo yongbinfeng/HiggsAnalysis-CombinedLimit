@@ -216,8 +216,8 @@ for chan in chans:
   
   nbinstotal += nbins
     
-print(np.max(np.abs(logkup)))
-print(np.max(np.abs(logkdown)))
+#print(np.max(np.abs(logkup)))
+#print(np.max(np.abs(logkdown)))
   
 logkavg = 0.5*(logkup+logkdown)
 logkhalfdiff = 0.5*(logkup-logkdown)
