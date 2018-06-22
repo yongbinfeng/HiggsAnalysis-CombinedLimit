@@ -36,6 +36,7 @@ parser.add_option("","--POIMode", default="mu",type="string", help="mode for POI
 parser.add_option("","--nonNegativePOI", default=True, action='store_true', help="force signal strengths to be non-negative")
 parser.add_option("","--POIDefault", default=1., type=float, help="mode for POI's")
 parser.add_option("","--maskedChan", default=[], type="string",action="append", help="channels to be masked in likelihood but propagated through for later storage/analysis")
+parser.add_option("-S","--doSystematics", type=int, default=1, help="enable systematics")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -61,7 +62,6 @@ print(options)
 
 nproc = len(DC.processes)
 nsignals = len(DC.signals)
-nsyst = len(DC.systs)
 
 dtype = 'float64'
 
@@ -85,8 +85,11 @@ for proc in DC.processes:
       
 #list of systematic uncertainties (nuisances)
 systs = []
-for syst in DC.systs:
-  systs.append(syst[0])
+if options.doSystematics:
+  for syst in DC.systs:
+    systs.append(syst[0])
+  
+nsyst = len(systs)  
   
 #list of channels, ordered such that masked channels are last
 chans = []
@@ -152,7 +155,7 @@ for chan in chans:
       
     logkupproc = np.empty([nbins,1,0],dtype=dtype)
     logkdownproc = np.empty([nbins,1,0],dtype=dtype)
-    for syst in DC.systs:
+    for syst in DC.systs[:nsyst]:
       name = syst[0]
       stype = syst[2]
       
