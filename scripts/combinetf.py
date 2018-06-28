@@ -365,7 +365,7 @@ for itoy in range(ntoys):
       erroutidx = systs.index(var)
       erridx = npoi + erroutidx
       minoserrsup = thetaminosups
-      minoserrsdown = thetaminosdown
+      minoserrsdown = thetaminosdowns
       scanname = "x"
       outthetaval = xval
       sigmas = thetasigmasv
