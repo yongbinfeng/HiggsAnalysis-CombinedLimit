@@ -66,6 +66,8 @@ nobs = filter(lambda x: x.name == 'nobs:0', variables)[0]
 
 
 invhess = graph.get_tensor_by_name("invhess:0")
+hesseigvals = graph.get_tensor_by_name("hesseigvals:0")
+mineigval = graph.get_tensor_by_name("mineigval:0")
 isposdef = graph.get_tensor_by_name("isposdef:0")
 edm = graph.get_tensor_by_name("edm:0")
 outputs = tf.get_collection("outputs")
@@ -93,6 +95,7 @@ lb = np.concatenate((-np.inf*np.ones([npoi],dtype=dtype),-np.inf*np.ones([nsyst]
 ub = np.concatenate((np.inf*np.ones([npoi],dtype=dtype),np.inf*np.ones([nsyst],dtype=dtype)),axis=0)
 
 xtol = np.finfo(dtype).eps
+edmtol = math.sqrt(xtol)
 btol = 1e-8
 minimizer = ScipyTROptimizerInterface(l, var_list = [x], var_to_bounds={x: (lb,ub)}, options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : btol})
 
@@ -314,16 +317,15 @@ for itoy in range(ntoys):
     ret = minimizer.minimize(sess)
 
   #get fit output
-  xval, outvalss, thetavals, theta0vals, invhessval, invhessoutvals, nllval, isposdefval, edmval = sess.run([x,outputs,theta,theta0,invhess,invhessoutputs,l,isposdef,edm])
+  xval, outvalss, thetavals, theta0vals, invhessval, invhessoutvals, nllval, mineig, isposdefval, edmval = sess.run([x,outputs,theta,theta0,invhess,invhessoutputs,l,mineigval,isposdef,edm])
   dnllval = 0.
-  if isposdefval and edmval > 0.:
+  if isposdefval and edmval > -edmtol:
     status = 0
   else:
     status = 1
   errstatus = status
   
-  print("status = %i, errstatus = %i, nllval = %f, edmval = %e" % (status,errstatus,nllval,edmval))  
-  
+  print("status = %i, errstatus = %i, nllval = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,edmval,mineig))  
   
   fullsigmasv = np.sqrt(np.diag(invhessval))
   if status==0:
@@ -363,7 +365,7 @@ for itoy in range(ntoys):
       erroutidx = systs.index(var)
       erridx = npoi + erroutidx
       minoserrsup = thetaminosups
-      minoserrsdown = thetaminosdown
+      minoserrsdown = thetaminosdowns
       scanname = "x"
       outthetaval = xval
       sigmas = thetasigmasv
@@ -506,7 +508,7 @@ for itoy in range(ntoys):
           for outval, toutval in zip(outvals,toutvals):
             toutval[0] = outval
         
-        for thetval, tthetaval in zip(scanthetavals,tthetavals):
+        for thetaval, tthetaval in zip(scanthetavals,tthetavals):
           tthetaval[0] = thetaval
 
         tree.Fill()
