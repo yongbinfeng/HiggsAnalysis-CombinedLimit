@@ -66,6 +66,7 @@ nobs = filter(lambda x: x.name == 'nobs:0', variables)[0]
 
 
 invhess = graph.get_tensor_by_name("invhess:0")
+hesseigvals = graph.get_tensor_by_name("hesseigvals:0")
 mineigval = graph.get_tensor_by_name("mineigval:0")
 isposdef = graph.get_tensor_by_name("isposdef:0")
 edm = graph.get_tensor_by_name("edm:0")
@@ -325,7 +326,6 @@ for itoy in range(ntoys):
   errstatus = status
   
   print("status = %i, errstatus = %i, nllval = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,edmval,mineig))  
-  
   
   fullsigmasv = np.sqrt(np.diag(invhessval))
   if status==0:
