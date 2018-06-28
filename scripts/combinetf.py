@@ -508,7 +508,7 @@ for itoy in range(ntoys):
           for outval, toutval in zip(outvals,toutvals):
             toutval[0] = outval
         
-        for thetval, tthetaval in zip(scanthetavals,tthetavals):
+        for thetaval, tthetaval in zip(scanthetavals,tthetavals):
           tthetaval[0] = thetaval
 
         tree.Fill()
