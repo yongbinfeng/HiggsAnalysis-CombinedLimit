@@ -342,14 +342,15 @@ for itoy in range(ntoys):
   outminosupd = {}
   outminosdownd = {}
 
-  nTotPars = len(pois+systs)
-  
-  if not options.toys > 0:
-    correlationHist = ROOT.TH2D('correlation_matrix', 'correlation matrix for '+('asimov' if options.toys < 0 else 'data fit'), nTotPars, 0., nTotPars, nTotPars, 0, nTotPars)
-    correlationHist.GetZaxis().SetRangeUser(-1., 1.)
-
   for output, outvals,invhessoutval in zip(outputs, outvalss,invhessoutvals):
     outname = ":".join(output.name.split(":")[:-1])    
+
+    if not options.toys > 0:
+      dName = 'asimov' if options.toys < 0 else 'data fit'
+      correlationHist = ROOT.TH2D('correlation_matrix_channel'+outname, 'correlation matrix for '+dName+' in channel'+outname, int(nparms), 0., 1., int(nparms), 0., 1.)
+      covarianceHist  = ROOT.TH2D('covariance_matrix_channel' +outname, 'covariance matrix for ' +dName+' in channel'+outname, int(nparms), 0., 1., int(nparms), 0., 1.)
+      correlationHist.GetZaxis().SetRangeUser(-1., 1.)
+
     if status==0:
       sigmasv = np.sqrt(np.diag(invhessoutval))[:npoi]
       if not options.toys > 0:
@@ -361,6 +362,9 @@ for itoy in range(ntoys):
             correlationHist.SetBinContent(ip1+1, ip2+1, correlationMatrix[ip1][ip2])
             correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
             correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
+            covarianceHist.SetBinContent(ip1+1, ip2+1, invhessoutval[ip1][ip2])
+            covarianceHist.GetXaxis().SetBinLabel(ip1+1, p1)
+            covarianceHist.GetYaxis().SetBinLabel(ip2+1, p2)
     else:
       sigmasv = -99.*np.ones_like(outvals)
       if not options.toys > 0:
@@ -369,6 +373,9 @@ for itoy in range(ntoys):
             correlationHist.SetBinContent(ip1+1, ip2+1, -1.)
             correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
             correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
+            covarianceHist.SetBinContent(ip1+1, ip2+1, -1.)
+            covarianceHist.GetXaxis().SetBinLabel(ip1+1, p1)
+            covarianceHist.GetYaxis().SetBinLabel(ip2+1, p2)
     
     minoserrsup = -99.*np.ones_like(sigmasv)
     minoserrsdown = -99.*np.ones_like(sigmasv)
@@ -379,6 +386,10 @@ for itoy in range(ntoys):
   
     outminosupd[outname] = minoserrsup
     outminosdownd[outname] = minoserrsdown
+
+    if not options.toys > 0:
+      correlationHist.Write()
+      covarianceHist .Write()
 
   for var in options.minos:
     print("running minos-like algorithm for %s" % var)
