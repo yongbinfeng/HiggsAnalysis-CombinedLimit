@@ -377,22 +377,22 @@ for itoy in range(ntoys):
         for ip1, p1 in enumerate(pois+systs):
           for ip2, p2 in enumerate(pois+systs):
             correlationHist.SetBinContent(ip1+1, ip2+1, correlationMatrix[ip1][ip2])
-            correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
-            correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
+            correlationHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
+            correlationHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)
             covarianceHist.SetBinContent(ip1+1, ip2+1, invhessoutval[ip1][ip2])
-            covarianceHist.GetXaxis().SetBinLabel(ip1+1, p1)
-            covarianceHist.GetYaxis().SetBinLabel(ip2+1, p2)
+            covarianceHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
+            covarianceHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)
     else:
       sigmasv = -99.*np.ones_like(outvals)
       if not options.toys > 0:
         for ip1, p1 in enumerate(pois+systs):
           for ip2, p2 in enumerate(pois+systs):
             correlationHist.SetBinContent(ip1+1, ip2+1, -1.)
-            correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
-            correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
+            correlationHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
+            correlationHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)
             covarianceHist.SetBinContent(ip1+1, ip2+1, -1.)
-            covarianceHist.GetXaxis().SetBinLabel(ip1+1, p1)
-            covarianceHist.GetYaxis().SetBinLabel(ip2+1, p2)
+            covarianceHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
+            covarianceHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)
     
     minoserrsup = -99.*np.ones_like(sigmasv)
     minoserrsdown = -99.*np.ones_like(sigmasv)
