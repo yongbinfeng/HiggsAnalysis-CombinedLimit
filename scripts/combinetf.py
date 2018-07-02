@@ -20,7 +20,7 @@ argv.remove( '-b-' )
 
 from array import array
 
-from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface
+from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,JacobianCompute
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 parser.add_option("-t","--toys", default=0, type=int, help="run a given number of toys, 0 fits the data (default), and -1 fits the asimov toy")
@@ -64,14 +64,7 @@ nexp = graph.get_tensor_by_name("nexp:0")
 nexpnom = graph.get_tensor_by_name("nexpnom:0")
 nobs = filter(lambda x: x.name == 'nobs:0', variables)[0]
 
-
-invhess = graph.get_tensor_by_name("invhess:0")
-hesseigvals = graph.get_tensor_by_name("hesseigvals:0")
-mineigval = graph.get_tensor_by_name("mineigval:0")
-isposdef = graph.get_tensor_by_name("isposdef:0")
-edm = graph.get_tensor_by_name("edm:0")
 outputs = tf.get_collection("outputs")
-invhessoutputs = tf.get_collection("invhessoutputs")
 
 cprocs = graph.get_tensor_by_name("cprocs:0")
 csignals = graph.get_tensor_by_name("csignals:0")
@@ -83,13 +76,19 @@ npoi = cpois.shape[0]
 nsyst = csysts.shape[0]
 nparms = npoi + nsyst
 
+grad = tf.gradients(l,x)[0]
+hesscomp = JacobianCompute(grad,x)
+
+jaccomps = []
+for output in outputs:
+  jaccomps.append(JacobianCompute(tf.concat([output,theta],axis=0),x))
+
+
 l0 = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
 x0 = tf.Variable(np.zeros(x.shape,dtype=dtype),trainable=False)
 a = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
 errdir = tf.Variable(np.zeros(x.shape,dtype=dtype),trainable=False)
 dlconstraint = l - l0
-
-
 
 lb = np.concatenate((-np.inf*np.ones([npoi],dtype=dtype),-np.inf*np.ones([nsyst],dtype=dtype)),axis=0)
 ub = np.concatenate((np.inf*np.ones([npoi],dtype=dtype),np.inf*np.ones([nsyst],dtype=dtype)),axis=0)
@@ -123,7 +122,7 @@ for scanname in scannames:
 globalinit = tf.global_variables_initializer()
 nexpnomassign = tf.assign(nexpnom,nexp)
 asimovassign = tf.assign(nobs,nexp)
-asimovrandomizestart = tf.assign(x,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(x,invhess).sample(),lb,ub))
+#asimovrandomizestart = tf.assign(x,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(x,invhess).sample(),lb,ub))
 bootstrapassign = tf.assign(nobs,tf.random_poisson(nobs,shape=[],dtype=dtype))
 toyassign = tf.assign(nobs,tf.random_poisson(nexp,shape=[],dtype=dtype))
 frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=theta.shape,dtype=dtype))
@@ -284,7 +283,8 @@ for itoy in range(ntoys):
     print("Running fit to asimov toy")
     sess.run(asimovassign)
     if options.randomizeStart:
-      sess.run(asimovrandomizestart)
+      raise Exception("Randomization of starting values is not currently implemented.")
+      #sess.run(asimovrandomizestart)
     else:
       dofit = False
   elif options.toys == 0:
@@ -317,18 +317,32 @@ for itoy in range(ntoys):
     ret = minimizer.minimize(sess)
 
   #get fit output
-  xval, outvalss, thetavals, theta0vals, invhessval, invhessoutvals, nllval, mineig, isposdefval, edmval = sess.run([x,outputs,theta,theta0,invhess,invhessoutputs,l,mineigval,isposdef,edm])
+  xval, outvalss, thetavals, theta0vals, nllval, gradval = sess.run([x,outputs,theta,theta0,l,grad])
+  #compute hessian
+  hessval = hesscomp.compute(sess)
+  #print(hessval.shape)
+  #print(hessval)
   dnllval = 0.
-  if isposdefval and edmval > -edmtol:
+  mineig = np.amin(np.linalg.eigvalsh(hessval))
+  isposdef =  mineig > 0.
+  gradcol = np.reshape(gradval,[-1,1])
+  try:
+    invhessval = np.linalg.inv(hessval)
+    edmval = 0.5*np.matmul(np.matmul(np.transpose(gradcol),invhessval),gradcol)
+    errstatus = 0
+  except:
+    edmval = -99.
+    errstatus = 1
+    
+  if isposdef and edmval > -edmtol:
     status = 0
   else:
     status = 1
-  errstatus = status
   
   print("status = %i, errstatus = %i, nllval = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,edmval,mineig))  
   
   fullsigmasv = np.sqrt(np.diag(invhessval))
-  if status==0:
+  if errstatus==0:
     thetasigmasv = fullsigmasv[npoi:]
   else:
     thetasigmasv = -99.*np.ones_like(thetavals)
@@ -342,12 +356,43 @@ for itoy in range(ntoys):
   outminosupd = {}
   outminosdownd = {}
 
-  for output, outvals,invhessoutval in zip(outputs, outvalss,invhessoutvals):
+  for output, outvals,jaccomp in zip(outputs, outvalss,jaccomps):
     outname = ":".join(output.name.split(":")[:-1])    
-    if status==0:
+
+    if not options.toys > 0:
+      dName = 'asimov' if options.toys < 0 else 'data fit'
+      correlationHist = ROOT.TH2D('correlation_matrix_channel'+outname, 'correlation matrix for '+dName+' in channel'+outname, int(nparms), 0., 1., int(nparms), 0., 1.)
+      covarianceHist  = ROOT.TH2D('covariance_matrix_channel' +outname, 'covariance matrix for ' +dName+' in channel'+outname, int(nparms), 0., 1., int(nparms), 0., 1.)
+      correlationHist.GetZaxis().SetRangeUser(-1., 1.)
+
+    if errstatus==0:
+      jac = jaccomp.compute(sess)
+      jact = np.transpose(jac)
+      invhessoutval = np.matmul(jac,np.matmul(invhessval,jact))
       sigmasv = np.sqrt(np.diag(invhessoutval))[:npoi]
+      if not options.toys > 0:
+        parameterErrors = np.sqrt(np.diag(invhessoutval))
+        variances2D     = parameterErrors[np.newaxis].T * parameterErrors
+        correlationMatrix = np.divide(invhessoutval, variances2D)
+        for ip1, p1 in enumerate(pois+systs):
+          for ip2, p2 in enumerate(pois+systs):
+            correlationHist.SetBinContent(ip1+1, ip2+1, correlationMatrix[ip1][ip2])
+            correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
+            correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
+            covarianceHist.SetBinContent(ip1+1, ip2+1, invhessoutval[ip1][ip2])
+            covarianceHist.GetXaxis().SetBinLabel(ip1+1, p1)
+            covarianceHist.GetYaxis().SetBinLabel(ip2+1, p2)
     else:
       sigmasv = -99.*np.ones_like(outvals)
+      if not options.toys > 0:
+        for ip1, p1 in enumerate(pois+systs):
+          for ip2, p2 in enumerate(pois+systs):
+            correlationHist.SetBinContent(ip1+1, ip2+1, -1.)
+            correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
+            correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
+            covarianceHist.SetBinContent(ip1+1, ip2+1, -1.)
+            covarianceHist.GetXaxis().SetBinLabel(ip1+1, p1)
+            covarianceHist.GetYaxis().SetBinLabel(ip2+1, p2)
     
     minoserrsup = -99.*np.ones_like(sigmasv)
     minoserrsdown = -99.*np.ones_like(sigmasv)
@@ -358,6 +403,10 @@ for itoy in range(ntoys):
   
     outminosupd[outname] = minoserrsup
     outminosdownd[outname] = minoserrsdown
+
+    if not options.toys > 0:
+      correlationHist.Write()
+      covarianceHist .Write()
 
   for var in options.minos:
     print("running minos-like algorithm for %s" % var)

@@ -21,6 +21,18 @@ from scipy.optimize import SR1, LinearConstraint, NonlinearConstraint, Bounds
 
 __all__ = ['ScipyTROptimizerInterface']
 
+class JacobianCompute:
+  def __init__(self, ys, xs):
+    self.nrows = xs.shape[0]
+    self.rowidx = tf.placeholder(tf.int32, shape=[])
+    self.jacrow = tf.gradients(ys[self.rowidx],xs)[0]
+    
+  def compute(self,sess):
+    jacrows = []
+    for irow in range(self.nrows):
+      jacrows.append(sess.run(self.jacrow, feed_dict = {self.rowidx: irow}))
+    return np.stack(jacrows,axis=0)
+
 def jacobian(ys,
              xs,
              name="hessians",

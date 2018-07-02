@@ -24,7 +24,7 @@ from HiggsAnalysis.CombinedLimit.DatacardParser import *
 from HiggsAnalysis.CombinedLimit.ModelTools import *
 from HiggsAnalysis.CombinedLimit.ShapeTools import *
 from HiggsAnalysis.CombinedLimit.PhysicsModel import *
-from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,jacobian
+from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 addDatacardParserOptions(parser)
@@ -352,48 +352,16 @@ if nbinsmasked>0:
 else:
   pmaskedexpnorm = pmaskedexp
 pmaskedexpnorm = tf.identity(pmaskedexpnorm,"pmaskedexpnorm")
-
-grad = tf.gradients(l,x)[0]
-hess = tf.hessians(l,x)[0]
-hesseigvals = tf.self_adjoint_eigvals(hess)
-mineigval = tf.reduce_min(hesseigvals)
-isposdef = tf.greater(mineigval,0.)
-gradcol = tf.reshape(grad,[-1,1])
-
-invalidinvhess = -99.*tf.eye(nparms,dtype=dtype)
-invhess = tf.cond(isposdef,lambda: tf.matrix_inverse(hess), lambda: invalidinvhess)
-edm = 0.5*tf.matmul(tf.matmul(gradcol,invhess,transpose_a=True),gradcol)
-
-hesseigvals = tf.identity(mineigval,name="hesseigvals")
-mineigval = tf.identity(mineigval,name="mineigval")
-isposdef = tf.identity(isposdef,name="isposdef")
-edm = tf.identity(edm,name="edm")
-invhess = tf.identity(invhess,name="invhess")
-
-
-if boundmode>0:
-  invhesspoitheta = tf.matmul(jacpoitheta,tf.matmul(invhess,jacpoitheta,transpose_b=True))
-else:
-  invhesspoitheta = invhess
-  
+ 
 outputs = []
-invhessoutputs = []
 
 outputs.append(poi)
 if nbinsmasked>0:
   outputs.append(pmaskedexp)
   outputs.append(pmaskedexpnorm)
-
-invhessoutputs.append(invhesspoitheta)
-for output in outputs[1:]:
-  outtheta = tf.concat([output,theta],axis=0)
-  jac = jacobian(outtheta,x)
-  invhessout = tf.matmul(jac,tf.matmul(invhess,jac,transpose_b=True))
-  invhessoutputs.append(invhessout)
   
-for output,invhessout in zip(outputs,invhessoutputs):
+for output in outputs:
   tf.add_to_collection("outputs",output)
-  tf.add_to_collection("invhessoutputs",invhessout)
 
 basename = '.'.join(options.fileName.split('.')[:-1])
 tf.train.export_meta_graph(filename='%s.meta' % basename)
