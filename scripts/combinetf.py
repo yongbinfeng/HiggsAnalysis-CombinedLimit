@@ -56,13 +56,13 @@ variables = tf.global_variables()
 
 graph = tf.get_default_graph()
 l = graph.get_tensor_by_name("loss:0")
-x = filter(lambda x: x.name == 'x:0', variables)[0]
+x = next((x for x in variables if x.name == 'x:0'), None)
 xpoi = graph.get_tensor_by_name("xpoi:0")
 theta = graph.get_tensor_by_name("theta:0")
-theta0 = filter(lambda x: x.name == 'theta0:0', variables)[0]
+theta0 = next((x for x in variables if x.name == 'theta0:0'), None)
 nexp = graph.get_tensor_by_name("nexp:0")
 nexpnom = graph.get_tensor_by_name("nexpnom:0")
-nobs = filter(lambda x: x.name == 'nobs:0', variables)[0]
+nobs = next((x for x in variables if x.name == 'nobs:0'), None)
 
 outputs = tf.get_collection("outputs")
 
@@ -248,7 +248,7 @@ for syst in systs:
   tthetaminosups.append(tthetaminosup)
   tthetaminosdowns.append(tthetaminosdown)
   tthetagenvals.append(tthetagenval)
-  tree.Branch(systname, tthetaval, '%s/F' % systname)
+  tree.Branch('%s' % systname, tthetaval, '%s/F' % systname)
   tree.Branch('%s_In' % systname, ttheta0val, '%s_In/F' % systname)
   tree.Branch('%s_err' % systname, tthetaerr, '%s_err/F' % systname)
   tree.Branch('%s_minosup' % systname, tthetaminosup, '%s_minosup/F' % systname)
