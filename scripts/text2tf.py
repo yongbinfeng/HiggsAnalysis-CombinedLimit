@@ -364,4 +364,6 @@ for output in outputs:
   tf.add_to_collection("outputs",output)
 
 basename = '.'.join(options.fileName.split('.')[:-1])
+if options.out:
+    basename = options.out.replace('.meta','')
 tf.train.export_meta_graph(filename='%s.meta' % basename)
