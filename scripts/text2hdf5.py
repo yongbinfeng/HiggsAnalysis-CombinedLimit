@@ -181,6 +181,7 @@ if nsyst>0:
 #counter to keep track of current bin being written
 ibin = 0
 for chan in chans:
+  print(chan)
   if not chan in options.maskedChan:
     #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
     data_obs_chan = np.array(MB.getShape(chan,"data_obs")).astype(dtype)[1:-1]
@@ -192,6 +193,7 @@ for chan in chans:
     
 #fill norm
 for iproc,proc in enumerate(procs):
+  print(proc)
   #counter to keep track of current bin being written
   ibin = 0
   for chan,nbinschan in zip(chans,nbinschans):
@@ -223,6 +225,8 @@ logkepsilon = math.log(1e-3)
 for isyst,syst in enumerate(DC.systs[:nsyst]):
   name = syst[0]
   stype = syst[2]
+  
+  print(name)
   
   for iproc,proc in enumerate(procs):
     #counter to keep track of current bin being written
@@ -256,7 +260,7 @@ for isyst,syst in enumerate(DC.systs[:nsyst]):
         if kfac>0:
           #retrieve nominal template to calculate ratios
           norm_chan = hnorm[iproc,ibin:ibin+nbinschan]
-          
+
           systup_chan = np.array(MB.getShape(chan,proc,name+"Up")).astype(dtype)[1:-1]
           if systup_chan.shape[0] != nbinschan:
             raise Exception("Mismatch between number of bins in channel for data and systematic variation template")
@@ -287,11 +291,3 @@ for isyst,syst in enumerate(DC.systs[:nsyst]):
       ibin += nbinschan
       logkavg_chan = None
       logkhalfdiff_chan = None
-
-print("dataobs hash = %d" % hash(hdata_obs[...].tostring()))
-print("norm hash = %d" % hash(hnorm[...].tostring()))
-print("norm transpose hash = %d" % hash(np.transpose(hnorm[...]).tostring()))
-print("logkavg hash = %d" % hash(hlogkavg[...].tostring()))
-print("logkavg transpose hash = %d" % hash(np.transpose(hlogkavg[...]).tostring()))
-
-print(np.transpose(hlogkavg[...]))
