@@ -120,7 +120,7 @@ nbinschans = []
 for chan in chans:
   if chan in options.maskedChan:
     nbinschan = 1
-    nbinsmasked += nbins
+    nbinsmasked += nbinschan
   else:
     #exclude overflow/underflow bins
     nbinschan = MB.getShape(chan,"data_obs").GetSize() - 2

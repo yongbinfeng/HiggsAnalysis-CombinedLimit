@@ -22,7 +22,7 @@ argv.remove( '-b-' )
 
 from array import array
 
-from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,JacobianCompute
+from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,JacobianCompute,jacobian
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 parser.add_option("-t","--toys", default=0, type=int, help="run a given number of toys, 0 fits the data (default), and -1 fits the asimov toy")
@@ -83,6 +83,8 @@ nsignals = len(signals)
 #build tensorflow graph for likelihood calculation
 
 #start by creating tensors which read in the hdf5 arrays (optimized for memory consumption)
+#note that this does NOT trigger the actual reading from disk, since this only happens when the
+#returned tensors are evaluated for the first time inside the graph
 data_obs = maketensor(hdata_obs)
 norm = maketensor(hnorm)
 logkavg = maketensor(hlogkavg)
@@ -202,15 +204,25 @@ lfull = lnfull + lc
 #pmaskedexp = tf.reduce_sum(pnormmasked, axis=-1)
 snormmasked = snorm[:nsignals,nbins:]
 normmasked = norm[:nsignals,nbins:]
-pmaskedexp = tf.einsum('i,ij,ij->i',r,snormmasked,normmasked)
+#pmaskedexp = tf.einsum('i,ij,ij->i',r,snormmasked,normmasked)
+pmaskedexppartial = tf.einsum('ij,ij->i',snormmasked,normmasked)
+pmaskedexp = r*pmaskedexppartial
 
 #maskedexp = tf.reduce_sum(pnormmasked, axis=0,keepdims=True)
 maskedexp = nexpfull[nbins:]
 
-if nbinsmasked>0:
-  pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=-1)
-else:
-  pmaskedexpnorm = pmaskedexp
+#if nbinsmasked>0:
+  #pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=-1)
+#else:
+  #pmaskedexpnorm = pmaskedexp
+#pmaskedexpnorm = tf.einsum('i,ij,ij,j->i',r,snormmasked,normmasked,tf.reciprocal(maskedexp))
+pmaskedexpnormpartial = tf.einsum('ij,ij,j->i',snormmasked,normmasked,tf.reciprocal(maskedexp))
+pmaskedexpnorm = r*pmaskedexpnormpartial
+ 
+#name outputs
+poi = tf.identity(poi, name=options.POIMode)
+pmaskedexp = tf.identity(pmaskedexp, "pmaskedexp")
+pmaskedexpnorm = tf.identity(pmaskedexpnorm, "pmaskedexpnorm")
  
 outputs = []
 
@@ -219,13 +231,20 @@ if nbinsmasked>0:
   outputs.append(pmaskedexp)
   outputs.append(pmaskedexpnorm)
 
+grad = tf.gradients(l,x,gate_gradients=True)[0]
+hessian = jacobian(grad,x,gate_gradients=True,parallel_iterations=1,back_prop=False)
+eigvals = tf.self_adjoint_eigvals(hessian)
+mineigv = tf.reduce_min(eigvals)
+isposdef = mineigv > 0.
+invhessian = tf.matrix_inverse(hessian)
+gradcol = tf.reshape(grad,[-1,1])
+edm = 0.5*tf.matmul(tf.matmul(gradcol,invhessian,transpose_a=True),gradcol)
 
-grad = tf.gradients(l,x)[0]
-hesscomp = JacobianCompute(grad,x)
-
-jaccomps = []
+invhessianouts = []
 for output in outputs:
-  jaccomps.append(JacobianCompute(tf.concat([output,theta],axis=0),x))
+  jacout = jacobian(tf.concat([output,theta],axis=0),x,gate_gradients=True,parallel_iterations=1,back_prop=False)
+  invhessianout = tf.matmul(jacout,tf.matmul(invhessian,jacout,transpose_b=True))
+  invhessianouts.append(invhessianout)
 
 l0 = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
 x0 = tf.Variable(np.zeros(x.shape,dtype=dtype),trainable=False)
@@ -456,32 +475,28 @@ for itoy in range(ntoys):
     ret = minimizer.minimize(sess)
 
   #get fit output
-  xval, outvalss, thetavals, theta0vals, nllval, gradval = sess.run([x,outputs,theta,theta0,l,grad])
-  #compute hessian
-  hessval = hesscomp.compute(sess)
-  #print(hessval.shape)
-  #print(hessval)
+  xval, outvalss, thetavals, theta0vals, nllval = sess.run([x,outputs,theta,theta0,l])
   dnllval = 0.
-  mineig = np.amin(np.linalg.eigvalsh(hessval))
-  isposdef =  mineig > 0.
-  gradcol = np.reshape(gradval,[-1,1])
+  #get inverse hessians for error calculation (can fail if matrix is not invertible)
   try:
-    invhessval = np.linalg.inv(hessval)
-    edmval = 0.5*np.matmul(np.matmul(np.transpose(gradcol),invhessval),gradcol)
+    invhessval,mineigval,isposdefval,edmval,invhessoutvals = sess.run([invhessian,mineigv,isposdef,edm,invhessianouts])
     errstatus = 0
   except:
     edmval = -99.
+    isposdefval = False
+    mineigval = -99.
+    invhessoutvals = outvalss
     errstatus = 1
     
-  if isposdef and edmval > -edmtol:
+  if isposdefval and edmval > -edmtol:
     status = 0
   else:
     status = 1
   
-  print("status = %i, errstatus = %i, nllval = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,edmval,mineig))  
+  print("status = %i, errstatus = %i, nllval = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,edmval,mineigval))  
   
-  fullsigmasv = np.sqrt(np.diag(invhessval))
   if errstatus==0:
+    fullsigmasv = np.sqrt(np.diag(invhessval))
     thetasigmasv = fullsigmasv[npoi:]
   else:
     thetasigmasv = -99.*np.ones_like(thetavals)
@@ -495,7 +510,7 @@ for itoy in range(ntoys):
   outminosupd = {}
   outminosdownd = {}
 
-  for output, outvals,jaccomp in zip(outputs, outvalss,jaccomps):
+  for output, outvals,invhessoutval in zip(outputs, outvalss,invhessoutvals):
     outname = ":".join(output.name.split(":")[:-1])    
 
     if not options.toys > 0:
@@ -505,9 +520,9 @@ for itoy in range(ntoys):
       correlationHist.GetZaxis().SetRangeUser(-1., 1.)
 
     if errstatus==0:
-      jac = jaccomp.compute(sess)
-      jact = np.transpose(jac)
-      invhessoutval = np.matmul(jac,np.matmul(invhessval,jact))
+      #jac = jaccomp.compute(sess)
+      #jact = np.transpose(jac)
+      #invhessoutval = np.matmul(jac,np.matmul(invhessval,jact))
       sigmasv = np.sqrt(np.diag(invhessoutval))[:npoi]
       if not options.toys > 0:
         parameterErrors = np.sqrt(np.diag(invhessoutval))
