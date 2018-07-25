@@ -148,15 +148,21 @@ poi = tf.identity(poi, name=options.POIMode)
 theta = tf.identity(theta, name="theta")
 
 #interpolation for asymmetric log-normal
-mtheta = tf.reshape(theta, [-1,1,1])
-twox = 2.*mtheta
+twox = 2.*theta
 twox2 = twox*twox
 alpha =  0.125 * twox * (twox2 * (3*twox2 - 10.) + 15.)
 alpha = tf.clip_by_value(alpha,-1.,1.)
-logk = logkavg + alpha*logkhalfdiff
 
 #matrix encoding effect of nuisance parameters
-logsnorm = tf.reduce_sum(logk*mtheta,axis=0)
+#memory efficient version (do summation together with multiplication in a single tensor contraction step)
+#this is equivalent to 
+#alpha = tf.reshape(alpha,[-1,1,1])
+#theta = tf.reshape(theta,[-1,1,1])
+#logk = logkavg + alpha*logkhalfdiff
+#logsnorm = theta*logk
+alphatheta = alpha*theta
+logsnorm = tf.einsum('i,ijk->jk',theta,logkavg) + tf.einsum('i,ijk->jk',alphatheta,logkhalfdiff)
+
 snorm = tf.exp(logsnorm)
 
 #vector encoding effect of signal strengths
@@ -166,13 +172,19 @@ elif options.POIMode == "none":
   r = tf.ones([nsignals],dtype=dtype)
 
 rnorm = tf.concat([r,tf.ones([nproc-nsignals],dtype=dtype)],axis=0)
-rnorm = tf.reshape(rnorm,[-1,1])
+
+#pnormfull = rnorm*snorm*norm
+#nexpfull = tf.reduce_sum(pnormfull,axis=0)
 
 #final expected yields per-bin including effect of signal
 #strengths and nuisance parmeters
-pnormfull = rnorm*snorm*norm
-  
-nexpfull = tf.reduce_sum(pnormfull,axis=0)
+#memory efficient version (do summation together with multiplication in a single tensor contraction step)
+#equivalent to (with some reshaping to explicitly match indices)
+#rnorm = tf.reshape(rnorm,[-1,1])
+#pnormfull = rnorm*snorm*norm
+#nexpfull = tf.reduce_sum(pnormfull,axis=0)
+nexpfull = tf.einsum('i,ij,ij->j',rnorm,snorm,norm)
+
 nexp = nexpfull[:nbins]
 
 nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
@@ -199,12 +211,16 @@ l = tf.identity(l,name="loss")
 lfull = lnfull + lc
 lfull = tf.identity(lfull,name="lossfull")
 
-pnormmasked = pnormfull[:nsignals,nbins:]
-pmaskedexp = tf.reduce_sum(pnormmasked, axis=-1)
-pmaskedexp = tf.identity(pmaskedexp, name="pmaskedexp")
+#pnormmasked = pnormfull[:nsignals,nbins:]
+#pmaskedexp = tf.reduce_sum(pnormmasked, axis=-1)
+#pmaskedexp = tf.identity(pmaskedexp, name="pmaskedexp")
+snormmasked = snorm[:nsignals,nbins:]
+normmasked = norm[:nsignals,nbins:]
+pmaskedexp = tf.einsum('i,ij,ij->i',r,snormmasked,normmasked)
 
-maskedexp = tf.reduce_sum(pnormmasked, axis=0,keepdims=True)
-maskedexp = tf.identity(maskedexp,"maskedexp")
+#maskedexp = tf.reduce_sum(pnormmasked, axis=0,keepdims=True)
+#maskedexp = tf.identity(maskedexp,"maskedexp")
+maskedexp = nexpfull[nbins:]
 
 if nbinsmasked>0:
   pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=-1)
