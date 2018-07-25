@@ -22,7 +22,7 @@ argv.remove( '-b-' )
 
 from array import array
 
-from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,JacobianCompute,jacobian
+from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,jacobian
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 parser.add_option("-t","--toys", default=0, type=int, help="run a given number of toys, 0 fits the data (default), and -1 fits the asimov toy")
