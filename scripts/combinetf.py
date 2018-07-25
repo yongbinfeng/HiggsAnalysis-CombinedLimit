@@ -116,12 +116,6 @@ elif boundmode==1:
 
 print("nbins = %d, npoi = %d, nsyst = %d" % (data_obs.shape[0], npoi, nsyst))
 
-cprocs = tf.constant(procs,name="cprocs")
-csignals = tf.constant(signals,name="csignals")
-csysts = tf.constant(systs,name="csysts")
-cmaskedchans = tf.constant(maskedchans,name="cmaskedchans")
-cpois = tf.constant(pois,name="cpois")
-
 #data
 nobs = tf.Variable(data_obs, trainable=False, name="nobs")
 theta0 = tf.Variable(tf.zeros([nsyst],dtype=dtype), trainable=False, name="theta0")
@@ -270,6 +264,7 @@ for scanname in scannames:
 
 globalinit = tf.global_variables_initializer()
 nexpnomassign = tf.assign(nexpnom,nexp)
+dataobsassign = tf.assign(nobs,data_obs)
 asimovassign = tf.assign(nobs,nexp)
 #asimovrandomizestart = tf.assign(x,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(x,invhess).sample(),lb,ub))
 bootstrapassign = tf.assign(nobs,tf.random_poisson(nobs,shape=[],dtype=dtype))
@@ -277,23 +272,6 @@ toyassign = tf.assign(nobs,tf.random_poisson(nexp,shape=[],dtype=dtype))
 frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=theta.shape,dtype=dtype))
 thetastartassign = tf.assign(x, tf.concat([xpoi,theta0],axis=0))
 bayesassign = tf.assign(x, tf.concat([xpoi,theta+tf.random_normal(shape=theta.shape,dtype=dtype)],axis=0))
-
-#initialize tf session
-if options.nThreads>0:
-  config = tf.ConfigProto(intra_op_parallelism_threads=options.nThreads, inter_op_parallelism_threads=options.nThreads)
-else:
-  config = None
-
-sess = tf.Session(config=config)
-sess.run(globalinit)
-
-#rthetav = np.concatenate((options.expectSignal*np.ones([npoi],dtype=dtype), np.zeros([nsyst],dtype=dtype)), axis=0)
-xv = sess.run(x)
-data_obs = sess.run(nobs)
-procs, signals, systs, pois = sess.run([cprocs,csignals,csysts,cpois])
-signals = signals.tolist()
-systs = systs.tolist()
-pois = pois.tolist()
 
 #initialize output tree
 f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
@@ -408,6 +386,18 @@ ntoys = options.toys
 if ntoys <= 0:
   ntoys = 1
 
+#initialize tf session
+if options.nThreads>0:
+  config = tf.ConfigProto(intra_op_parallelism_threads=options.nThreads, inter_op_parallelism_threads=options.nThreads)
+else:
+  config = None
+
+sess = tf.Session(config=config)
+#note that initializing all variables also triggers reading the hdf5 arrays from disk and populating the caches
+sess.run(globalinit)
+
+xv = sess.run(x)
+
 #set likelihood offset
 sess.run(nexpnomassign)
 
@@ -438,7 +428,7 @@ for itoy in range(ntoys):
       dofit = False
   elif options.toys == 0:
     print("Running fit to observed data")
-    nobs.load(data_obs,sess)
+    sess.run(dataobsassign)
   else:
     print("Running toy %i" % itoy)  
     if options.toysFrequentist:
@@ -452,7 +442,7 @@ for itoy in range(ntoys):
       
     if options.bootstrapData:
       #randomize from observed data
-      nobs.load(data_obs,sess)
+      sess.run(dataobsassign)
       sess.run(bootstrapassign)
     else:
       #randomize from expectation
@@ -523,8 +513,8 @@ for itoy in range(ntoys):
         parameterErrors = np.sqrt(np.diag(invhessoutval))
         variances2D     = parameterErrors[np.newaxis].T * parameterErrors
         correlationMatrix = np.divide(invhessoutval, variances2D)
-        for ip1, p1 in enumerate(pois+systs):
-          for ip2, p2 in enumerate(pois+systs):
+        for ip1, p1 in enumerate(parms):
+          for ip2, p2 in enumerate(parms):
             correlationHist.SetBinContent(ip1+1, ip2+1, correlationMatrix[ip1][ip2])
             correlationHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
             correlationHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)
@@ -534,8 +524,8 @@ for itoy in range(ntoys):
     else:
       sigmasv = -99.*np.ones_like(outvals)
       if not options.toys > 0:
-        for ip1, p1 in enumerate(pois+systs):
-          for ip2, p2 in enumerate(pois+systs):
+        for ip1, p1 in enumerate(parms):
+          for ip2, p2 in enumerate(parms):
             correlationHist.SetBinContent(ip1+1, ip2+1, -1.)
             correlationHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
             correlationHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)

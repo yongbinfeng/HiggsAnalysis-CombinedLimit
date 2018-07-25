@@ -37,7 +37,6 @@ def maketensor(h5dset):
       for g,c in zip(gv,h5dset.chunks):
         readslices.append(slice(g,g+c))
       readslices = tuple(readslices)
-      print(readslices)
       #read data from exactly one complete chunk
       aout = h5dset[readslices]
       yield aout
