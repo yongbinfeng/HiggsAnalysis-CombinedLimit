@@ -5,8 +5,10 @@ from optparse import OptionParser
 
 import tensorflow as tf
 import numpy as np
+import h5py
+import h5py_cache
+from HiggsAnalysis.CombinedLimit.tfh5pyutils import maketensor
 import scipy
-
 import math
 
 
@@ -37,6 +39,9 @@ parser.add_option("","--scan", default=[], type="string", action="append", help=
 parser.add_option("","--scanPoints", default=16, type=int, help="default number of points for likelihood scan")
 parser.add_option("","--scanRange", default=3., type=float, help="default scan range in terms of hessian uncertainty")
 parser.add_option("","--nThreads", default=-1., type=int, help="set number of threads (default is -1: use all available cores)")
+parser.add_option("","--POIMode", default="mu",type="string", help="mode for POI's")
+parser.add_option("","--nonNegativePOI", default=True, action='store_true', help="force signal strengths to be non-negative")
+parser.add_option("","--POIDefault", default=1., type=float, help="mode for POI's")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -50,31 +55,170 @@ tf.set_random_seed(seed)
 
 options.fileName = args[0]
 
-tf.train.import_meta_graph(options.fileName)
+cacheSize = 4*1024**2
+#TODO open file an extra time and enforce sufficient cache size for second file open
+f = h5py_cache.File(options.fileName, chunk_cache_mem_size=cacheSize, mode='r')
 
-variables = tf.global_variables()
+#load text arrays from file
+procs = f['hprocs'][...]
+signals = f['hsignals'][...]
+systs = f['hsysts'][...]
+maskedchans = f['hmaskedchans'][...]
 
-graph = tf.get_default_graph()
-l = graph.get_tensor_by_name("loss:0")
-x = next((x for x in variables if x.name == 'x:0'), None)
-xpoi = graph.get_tensor_by_name("xpoi:0")
-theta = graph.get_tensor_by_name("theta:0")
-theta0 = next((x for x in variables if x.name == 'theta0:0'), None)
-nexp = graph.get_tensor_by_name("nexp:0")
-nexpnom = graph.get_tensor_by_name("nexpnom:0")
-nobs = next((x for x in variables if x.name == 'nobs:0'), None)
+#load arrays from file
+hdata_obs = f['hdata_obs']
+hnorm = f['hnorm']
+hlogkavg = f['hlogkavg']
+hlogkhalfdiff = f['hlogkhalfdiff']
 
-outputs = tf.get_collection("outputs")
+#infer some metadata from loaded information
+dtype = hnorm.dtype
+nbinsfull = hnorm.shape[-1]
+nbinsmasked = len(maskedchans)
+nbins = nbinsfull - nbinsmasked
+nsyst = len(systs)
+nproc = len(procs)
+nsignals = len(signals)
 
-cprocs = graph.get_tensor_by_name("cprocs:0")
-csignals = graph.get_tensor_by_name("csignals:0")
-csysts = graph.get_tensor_by_name("csysts:0")
-cpois = graph.get_tensor_by_name("cpois:0")
+#build tensorflow graph for likelihood calculation
 
-dtype = x.dtype.as_numpy_dtype
-npoi = cpois.shape[0]
-nsyst = csysts.shape[0]
+#start by creating tensors which read in the hdf5 arrays (optimized for memory consumption)
+data_obs = maketensor(hdata_obs)
+norm = maketensor(hnorm)
+logkavg = maketensor(hlogkavg)
+logkhalfdiff = maketensor(hlogkhalfdiff)
+
+if options.nonNegativePOI:
+  boundmode = 1
+else:
+  boundmode = 0
+
+pois = []  
+  
+if options.POIMode == "mu":
+  npoi = nsignals
+  poidefault = options.POIDefault*np.ones([npoi],dtype=dtype)
+  for signal in signals:
+    pois.append(signal)
+elif options.POIMode == "none":
+  npoi = 0
+  poidefault = np.empty([],dtype=dtype)
+else:
+  raise Exception("unsupported POIMode")
+
 nparms = npoi + nsyst
+parms = np.concatenate([pois,systs])
+
+if boundmode==0:
+  xpoidefault = poidefault
+elif boundmode==1:
+  xpoidefault = np.sqrt(poidefault)
+
+print("nbins = %d, npoi = %d, nsyst = %d" % (data_obs.shape[0], npoi, nsyst))
+
+cprocs = tf.constant(procs,name="cprocs")
+csignals = tf.constant(signals,name="csignals")
+csysts = tf.constant(systs,name="csysts")
+cmaskedchans = tf.constant(maskedchans,name="cmaskedchans")
+cpois = tf.constant(pois,name="cpois")
+
+#data
+nobs = tf.Variable(data_obs, trainable=False, name="nobs")
+theta0 = tf.Variable(tf.zeros([nsyst],dtype=dtype), trainable=False, name="theta0")
+
+#tf variable containing all fit parameters
+thetadefault = tf.zeros([nsyst],dtype=dtype)
+if npoi>0:
+  xdefault = tf.concat([xpoidefault,thetadefault], axis=0)
+else:
+  xdefault = thetadefault
+  
+x = tf.Variable(xdefault, name="x")
+
+xpoi = x[:npoi]
+theta = x[npoi:]
+
+if boundmode == 0:
+  poi = xpoi
+elif boundmode == 1:
+  poi = tf.square(xpoi)
+
+xpoi = tf.identity(poi, name="xpoi")
+poi = tf.identity(poi, name=options.POIMode)
+theta = tf.identity(theta, name="theta")
+
+#interpolation for asymmetric log-normal
+mtheta = tf.reshape(theta, [-1,1,1])
+twox = 2.*mtheta
+twox2 = twox*twox
+alpha =  0.125 * twox * (twox2 * (3*twox2 - 10.) + 15.)
+alpha = tf.clip_by_value(alpha,-1.,1.)
+logk = logkavg + alpha*logkhalfdiff
+
+#matrix encoding effect of nuisance parameters
+logsnorm = tf.reduce_sum(logk*mtheta,axis=0)
+snorm = tf.exp(logsnorm)
+
+#vector encoding effect of signal strengths
+if options.POIMode == "mu":
+  r = poi
+elif options.POIMode == "none":
+  r = tf.ones([nsignals],dtype=dtype)
+
+rnorm = tf.concat([r,tf.ones([nproc-nsignals],dtype=dtype)],axis=0)
+rnorm = tf.reshape(rnorm,[-1,1])
+
+#final expected yields per-bin including effect of signal
+#strengths and nuisance parmeters
+pnormfull = rnorm*snorm*norm
+  
+nexpfull = tf.reduce_sum(pnormfull,axis=0)
+nexp = nexpfull[:nbins]
+
+nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
+lognexp = tf.log(nexpsafe)
+
+nexpnom = tf.Variable(nexp, trainable=False, name="nexpnom")
+nexpnomsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexpnom)
+lognexpnom = tf.log(nexpnomsafe)
+
+#final likelihood computation
+
+#poisson term  
+lnfull = tf.reduce_sum(-nobs*lognexp + nexp, axis=-1)
+
+#poisson term with offset to improve numerical precision
+ln = tf.reduce_sum(-nobs*(lognexp-lognexpnom) + nexp-nexpnom, axis=-1)
+
+#constraints
+lc = tf.reduce_sum(0.5*tf.square(theta - theta0))
+
+l = ln + lc
+l = tf.identity(l,name="loss")
+
+lfull = lnfull + lc
+lfull = tf.identity(lfull,name="lossfull")
+
+pnormmasked = pnormfull[:nsignals,nbins:]
+pmaskedexp = tf.reduce_sum(pnormmasked, axis=-1)
+pmaskedexp = tf.identity(pmaskedexp, name="pmaskedexp")
+
+maskedexp = tf.reduce_sum(pnormmasked, axis=0,keepdims=True)
+maskedexp = tf.identity(maskedexp,"maskedexp")
+
+if nbinsmasked>0:
+  pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=-1)
+else:
+  pmaskedexpnorm = pmaskedexp
+pmaskedexpnorm = tf.identity(pmaskedexpnorm,"pmaskedexpnorm")
+ 
+outputs = []
+
+outputs.append(poi)
+if nbinsmasked>0:
+  outputs.append(pmaskedexp)
+  outputs.append(pmaskedexpnorm)
+
 
 grad = tf.gradients(l,x)[0]
 hesscomp = JacobianCompute(grad,x)
@@ -82,7 +226,6 @@ hesscomp = JacobianCompute(grad,x)
 jaccomps = []
 for output in outputs:
   jaccomps.append(JacobianCompute(tf.concat([output,theta],axis=0),x))
-
 
 l0 = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
 x0 = tf.Variable(np.zeros(x.shape,dtype=dtype),trainable=False)
