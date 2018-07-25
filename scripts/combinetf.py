@@ -10,7 +10,7 @@ import h5py_cache
 from HiggsAnalysis.CombinedLimit.tfh5pyutils import maketensor
 import scipy
 import math
-
+import time
 
 
 # import ROOT with a fix to get batch mode (http://root.cern.ch/phpBB3/viewtopic.php?t=3198)
@@ -42,6 +42,7 @@ parser.add_option("","--nThreads", default=-1., type=int, help="set number of th
 parser.add_option("","--POIMode", default="mu",type="string", help="mode for POI's")
 parser.add_option("","--nonNegativePOI", default=True, action='store_true', help="force signal strengths to be non-negative")
 parser.add_option("","--POIDefault", default=1., type=float, help="mode for POI's")
+parser.add_option("","--doBenchmark", default=False, action='store_true', help="run benchmarks")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -471,6 +472,29 @@ for itoy in range(ntoys):
   sess.run(thetastartassign)
   #set likelihood offset
   sess.run(nexpnomassign)
+  
+  if options.doBenchmark:
+    neval = 1000
+    t0 = time.time()
+    for i in range(neval):
+      lval = sess.run([l])
+    t = time.time() - t0
+    print("%d l evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
+    
+    neval = 200
+    t0 = time.time()
+    for i in range(neval):
+      lval,gval = sess.run([l,grad])
+    t = time.time() - t0
+    print("%d l+grad evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
+    
+    neval = 1
+    t0 = time.time()
+    for i in range(neval):
+      hessval = sess.run([hessian])
+    t = time.time() - t0
+    print("%d hessian evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
+  
   if dofit:
     ret = minimizer.minimize(sess)
 
