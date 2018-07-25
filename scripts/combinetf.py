@@ -143,7 +143,7 @@ if boundmode == 0:
 elif boundmode == 1:
   poi = tf.square(xpoi)
 
-xpoi = tf.identity(poi, name="xpoi")
+xpoi = tf.identity(xpoi, name="xpoi")
 poi = tf.identity(poi, name=options.POIMode)
 theta = tf.identity(theta, name="theta")
 
