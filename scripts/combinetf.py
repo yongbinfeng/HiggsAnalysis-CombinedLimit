@@ -143,10 +143,6 @@ if boundmode == 0:
 elif boundmode == 1:
   poi = tf.square(xpoi)
 
-xpoi = tf.identity(xpoi, name="xpoi")
-poi = tf.identity(poi, name=options.POIMode)
-theta = tf.identity(theta, name="theta")
-
 #interpolation for asymmetric log-normal
 twox = 2.*theta
 twox2 = twox*twox
@@ -206,27 +202,21 @@ ln = tf.reduce_sum(-nobs*(lognexp-lognexpnom) + nexp-nexpnom, axis=-1)
 lc = tf.reduce_sum(0.5*tf.square(theta - theta0))
 
 l = ln + lc
-l = tf.identity(l,name="loss")
-
 lfull = lnfull + lc
-lfull = tf.identity(lfull,name="lossfull")
 
 #pnormmasked = pnormfull[:nsignals,nbins:]
 #pmaskedexp = tf.reduce_sum(pnormmasked, axis=-1)
-#pmaskedexp = tf.identity(pmaskedexp, name="pmaskedexp")
 snormmasked = snorm[:nsignals,nbins:]
 normmasked = norm[:nsignals,nbins:]
 pmaskedexp = tf.einsum('i,ij,ij->i',r,snormmasked,normmasked)
 
 #maskedexp = tf.reduce_sum(pnormmasked, axis=0,keepdims=True)
-#maskedexp = tf.identity(maskedexp,"maskedexp")
 maskedexp = nexpfull[nbins:]
 
 if nbinsmasked>0:
   pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=-1)
 else:
   pmaskedexpnorm = pmaskedexp
-pmaskedexpnorm = tf.identity(pmaskedexpnorm,"pmaskedexpnorm")
  
 outputs = []
 
