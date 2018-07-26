@@ -117,7 +117,7 @@ if boundmode==0:
 elif boundmode==1:
   xpoidefault = np.sqrt(poidefault)
 
-print("nbins = %d, npoi = %d, nsyst = %d" % (data_obs.shape[0], npoi, nsyst))
+print("nbins = %d, nbinsfull = %d, nproc = %d, npoi = %d, nsyst = %d" % (nbins,nbinsfull,nproc, npoi, nsyst))
 
 #data
 nobs = tf.Variable(data_obs, trainable=False, name="nobs")
@@ -415,7 +415,6 @@ else:
 sess = tf.Session(config=config)
 #note that initializing all variables also triggers reading the hdf5 arrays from disk and populating the caches
 sess.run(globalinit)
-
 xv = sess.run(x)
 
 #set likelihood offset
@@ -474,16 +473,18 @@ for itoy in range(ntoys):
   sess.run(nexpnomassign)
   
   if options.doBenchmark:
-    neval = 1000
+    neval = 10
     t0 = time.time()
     for i in range(neval):
+      print(i)
       lval = sess.run([l])
     t = time.time() - t0
     print("%d l evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
     
-    neval = 200
+    neval = 10
     t0 = time.time()
     for i in range(neval):
+      print(i)
       lval,gval = sess.run([l,grad])
     t = time.time() - t0
     print("%d l+grad evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))

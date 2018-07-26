@@ -177,6 +177,8 @@ if nsyst>0:
   validateChunkSize(hlogkavg)
   validateChunkSize(hlogkhalfdiff)
 
+print("fill value = %f" % hlogkavg.fillvalue)
+
 #fill data_obs
 #counter to keep track of current bin being written
 ibin = 0
@@ -209,8 +211,9 @@ for iproc,proc in enumerate(procs):
       if not options.allowNegativeExpectation:
         norm_chan = np.maximum(norm_chan,0.)
     else:
-      #fill zeros for non-contributing processes
-      norm_chan = np.zeros([nbinschan],dtype=dtype)
+      #no need to explicitly fill zeros, just increment counter
+      ibin += nbinschan
+      continue
     
     #write to output array and increment counter
     hnorm[iproc,ibin:ibin+nbinschan] = norm_chan
@@ -236,13 +239,18 @@ for isyst,syst in enumerate(DC.systs[:nsyst]):
       hasproc = proc in expchan
       
       if not hasproc:
-        logkup_chan = np.zeros([nbinschan],dtype=dtype)
-        logkdown_chan = logkup_chan
+        #no need to explicitly fill zeros, just increment counter
+        ibin += nbinschan
+        continue
       elif stype=='lnN':
         ksyst = syst[4][chan][proc]
         if type(ksyst) is list:
           ksystup = ksyst[1]
           ksystdown = ksyst[0]
+          if ksystup == 0. and ksystdown==0.:
+            #no need to explicitly fill zeros, just increment counter
+            ibin += nbinschan
+            continue
           if ksystup == 0.:
             ksystup = 1.
           if ksystdown == 0.:
@@ -251,7 +259,9 @@ for isyst,syst in enumerate(DC.systs[:nsyst]):
           logkdown_chan = -math.log(ksystdown)*np.ones([nbinschan],dtype=dtype)
         else:
           if ksyst == 0.:
-            ksyst = 1.
+            #no need to explicitly fill zeros, just increment counter
+            ibin += nbinschan
+            continue
           logkup_chan = math.log(ksyst)*np.ones([nbinschan],dtype=dtype)
           logkdown_chan = logkup_chan
       elif 'shape' in stype:
@@ -276,8 +286,9 @@ for isyst,syst in enumerate(DC.systs[:nsyst]):
           systdown_chan = None
           
         else:
-          logkup_chan = np.zeros([nbinschan],dtype=dtype)
-          logkdown_chan = logkup_chan
+          #no need to explicitly fill zeros, just increment counter
+          ibin += nbinschan
+          continue
           
       #compute avg and halfdiff
       logkavg_chan = 0.5*(logkup_chan + logkdown_chan)
