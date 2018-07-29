@@ -4,10 +4,18 @@ from sys import argv, stdout, stderr, exit, modules
 from optparse import OptionParser
 
 import tensorflow as tf
+
+from tensorflow.python.framework import ops
+from tensorflow.python.framework import sparse_tensor
+from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import gen_sparse_ops
+from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import sparse_ops
+
 import numpy as np
 import h5py
 import h5py_cache
-from HiggsAnalysis.CombinedLimit.tfh5pyutils import maketensor
+from HiggsAnalysis.CombinedLimit.tfh5pyutils import maketensor,makesparsetensor
 import scipy
 import math
 import time
@@ -68,28 +76,53 @@ maskedchans = f['hmaskedchans'][...]
 
 #load arrays from file
 hdata_obs = f['hdata_obs']
-hnorm = f['hnorm']
-hlogkavg = f['hlogkavg']
-hlogkhalfdiff = f['hlogkhalfdiff']
+
+sparse = not 'hnorm' in f
+
+if sparse:
+  hlognorm_sparse = f['hlognorm_sparse']
+  hlogkavg_sparse = f['hlogkavg_sparse']
+  hlogkhalfdiff_sparse = f['hlogkhalfdiff_sparse']
+else:  
+  hnorm = f['hnorm']
+  hlogkavg = f['hlogkavg']
+  hlogkhalfdiff = f['hlogkhalfdiff']
 
 #infer some metadata from loaded information
-dtype = hnorm.dtype
-nbinsfull = hnorm.shape[-1]
+dtype = hdata_obs.dtype
+nbins = hdata_obs.shape[-1]
 nbinsmasked = len(maskedchans)
-nbins = nbinsfull - nbinsmasked
+nbinsfull = nbins + nbinsmasked
 nsyst = len(systs)
 nproc = len(procs)
 nsignals = len(signals)
 
 #build tensorflow graph for likelihood calculation
 
+#@ops.RegisterGradient("SparseReduceSumSparse")
+#def _SparseReduceSumSparseGrad(op, *grads):
+  #"""Similar to gradient for the Sum Op (i.e. tf.reduce_sum())."""
+  #sp_indices = op.inputs[0]
+  #sp_shape = op.inputs[2]
+  #output_shape_kept_dims = math_ops.reduced_shape(sp_shape, op.inputs[3])
+  #out_grad_reshaped = array_ops.reshape(grads[0], output_shape_kept_dims)
+  #scale = sp_shape // math_ops.to_int64(output_shape_kept_dims)
+  ## (sparse_indices, sparse_values, sparse_shape, reduction_axes)
+  #return (None, array_ops.gather_nd(out_grad_reshaped, sp_indices // scale),
+          #None, None)
+
 #start by creating tensors which read in the hdf5 arrays (optimized for memory consumption)
 #note that this does NOT trigger the actual reading from disk, since this only happens when the
 #returned tensors are evaluated for the first time inside the graph
 data_obs = maketensor(hdata_obs)
-norm = maketensor(hnorm)
-logkavg = maketensor(hlogkavg)
-logkhalfdiff = maketensor(hlogkhalfdiff)
+if sparse:
+  lognorm_sparse = makesparsetensor(hlognorm_sparse)
+  logkavg_sparse = makesparsetensor(hlogkavg_sparse)
+  logkhalfdiff_sparse = makesparsetensor(hlogkhalfdiff_sparse)
+else:
+  norm = maketensor(hnorm)
+  logkavg = maketensor(hlogkavg)
+  logkhalfdiff = maketensor(hlogkhalfdiff)
 
 if options.nonNegativePOI:
   boundmode = 1
@@ -140,24 +173,6 @@ if boundmode == 0:
 elif boundmode == 1:
   poi = tf.square(xpoi)
 
-#interpolation for asymmetric log-normal
-twox = 2.*theta
-twox2 = twox*twox
-alpha =  0.125 * twox * (twox2 * (3*twox2 - 10.) + 15.)
-alpha = tf.clip_by_value(alpha,-1.,1.)
-
-#matrix encoding effect of nuisance parameters
-#memory efficient version (do summation together with multiplication in a single tensor contraction step)
-#this is equivalent to 
-#alpha = tf.reshape(alpha,[-1,1,1])
-#theta = tf.reshape(theta,[-1,1,1])
-#logk = logkavg + alpha*logkhalfdiff
-#logsnorm = theta*logk
-alphatheta = alpha*theta
-logsnorm = tf.einsum('i,ijk->jk',theta,logkavg) + tf.einsum('i,ijk->jk',alphatheta,logkhalfdiff)
-
-snorm = tf.exp(logsnorm)
-
 #vector encoding effect of signal strengths
 if options.POIMode == "mu":
   r = poi
@@ -166,18 +181,197 @@ elif options.POIMode == "none":
 
 rnorm = tf.concat([r,tf.ones([nproc-nsignals],dtype=dtype)],axis=0)
 
-#pnormfull = rnorm*snorm*norm
-#nexpfull = tf.reduce_sum(pnormfull,axis=0)
+#interpolation for asymmetric log-normal
+twox = 2.*theta
+twox2 = twox*twox
+alpha =  0.125 * twox * (twox2 * (3*twox2 - 10.) + 15.)
+alpha = tf.clip_by_value(alpha,-1.,1.)
 
-#final expected yields per-bin including effect of signal
-#strengths and nuisance parmeters
-#memory efficient version (do summation together with multiplication in a single tensor contraction step)
-#equivalent to (with some reshaping to explicitly match indices)
-#rnorm = tf.reshape(rnorm,[-1,1])
-#pnormfull = rnorm*snorm*norm
-#nexpfull = tf.reduce_sum(pnormfull,axis=0)
-nexpfull = tf.einsum('i,ij,ij->j',rnorm,snorm,norm)
+def sparse_reduce_sum_sparse_0(in_sparse):  
+  indicespartial = in_sparse.indices[:,1:]
+  indicespartial_32 = tf.cast(indicespartial,tf.int32)
+  reduced_shape = in_sparse.get_shape()[1:]
+  flat_shape = 1
+  for s in reduced_shape:
+    flat_shape *= int(s)
+  flat_shape = (flat_shape,)
+  idxmodifier = tf.cumprod(reduced_shape, exclusive=True, reverse=True)
+  
+  indicesflat = tf.einsum('j,ij->i',idxmodifier,indicespartial_32)
+  reduced_indices_flat, segment_ids = tf.unique(indicesflat)
+  reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
+  reduced_indices_flat = tf.reshape(reduced_indices_flat,[-1,1])
+  reduced_values = tf.unsorted_segment_sum(in_sparse.values, segment_ids,tf.shape(reduced_indices_flat)[0])
+  reduced_sparse = tf.SparseTensor(reduced_indices_flat, reduced_values, flat_shape)
+  reduced_sparse = tf.sparse_reorder(reduced_sparse)
+  reduced_sparse = tf.sparse_reshape(reduced_sparse,reduced_shape)
+  return reduced_sparse
 
+def sparse_reduce_sum_0(in_sparse):  
+  indicespartial = in_sparse.indices[:,1:]
+  indicespartial_32 = tf.cast(indicespartial,tf.int32)
+  reduced_shape = in_sparse.get_shape()[1:]
+  flat_shape = 1
+  for s in reduced_shape:
+    flat_shape *= int(s)
+  flat_shape = (flat_shape,)
+  idxmodifier = tf.cumprod(reduced_shape, exclusive=True, reverse=True)
+  
+  indicesflat = tf.einsum('j,ij->i',idxmodifier,indicespartial_32)
+  segment_ids = indicesflat
+  #reduced_indices_flat, segment_ids = tf.unique(indicesflat)
+  reduced_indices_flat = indicesflat
+  reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
+  reduced_indices_flat = tf.reshape(reduced_indices_flat,[-1,1])
+  reduced_values = tf.unsorted_segment_sum(in_sparse.values, segment_ids,flat_shape[0])
+  reduced = tf.reshape(reduced_values, reduced_shape)
+  #reduced_sparse = tf.SparseTensor(reduced_indices_flat, reduced_values, flat_shape)
+  #reduced_sparse = tf.sparse_reorder(reduced_sparse)
+  #reduced_sparse = tf.sparse_reshape(reduced_sparse,reduced_shape)
+  return reduced
+
+def sparse_reduce_sum_m1(in_sparse):  
+  indicespartial = in_sparse.indices[:,:-1]
+  indicespartial_32 = tf.cast(indicespartial,tf.int32)
+  #reduced_shape = in_sparse.get_shape()[:-1]
+  reduced_shape = (nsignals,)
+  print(reduced_shape)
+  flat_shape = 1
+  for s in reduced_shape:
+    flat_shape *= int(s)
+  flat_shape = (flat_shape,)
+  idxmodifier = tf.cumprod(reduced_shape, exclusive=True, reverse=True)
+  
+  indicesflat = tf.einsum('j,ij->i',idxmodifier,indicespartial_32)
+  segment_ids = indicesflat
+  #reduced_indices_flat, segment_ids = tf.unique(indicesflat)
+  reduced_indices_flat = indicesflat
+  reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
+  reduced_indices_flat = tf.reshape(reduced_indices_flat,[-1,1])
+  reduced_values = tf.unsorted_segment_sum(in_sparse.values, segment_ids,flat_shape[0])
+  reduced = tf.reshape(reduced_values, reduced_shape)
+  #reduced_sparse = tf.SparseTensor(reduced_indices_flat, reduced_values, flat_shape)
+  #reduced_sparse = tf.sparse_reorder(reduced_sparse)
+  #reduced_sparse = tf.sparse_reshape(reduced_sparse,reduced_shape)
+  return reduced
+
+def sparse_reduce_sum_sparse_0t(in_sparse):
+  perm = range(1, len(in_sparse.get_shape()))
+  perm.append(0)
+  in_sparse_t = tf.sparse_transpose(in_sparse,perm = perm)
+  indicespartial = in_sparse_t.indices[:,:-1]
+  indicespartial_32 = tf.cast(indicespartial,tf.int32)
+  reduced_shape = in_sparse.get_shape()[1:]
+  flat_shape = 1
+  for s in reduced_shape:
+    flat_shape *= int(s)
+  flat_shape = (flat_shape,)
+  idxmodifier = tf.cumprod(reduced_shape, exclusive=True, reverse=True)
+  
+  indicesflat = tf.einsum('j,ij->i',idxmodifier,indicespartial_32)
+  reduced_indices_flat, segment_ids = tf.unique(indicesflat)
+  reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
+  reduced_indices_flat = tf.reshape(reduced_indices_flat,[-1,1])
+  reduced_values = tf.segment_sum(in_sparse_t.values, segment_ids)
+  reduced_sparse = tf.SparseTensor(reduced_indices_flat, reduced_values, flat_shape)
+  reduced_sparse = tf.sparse_reshape(reduced_sparse,reduced_shape)
+  return reduced_sparse
+
+if sparse:
+  mtheta = tf.reshape(theta,[-1,1,1])
+  malpha = tf.reshape(alpha,[-1,1,1])
+  
+  logk_sparse = tf.sparse_add(logkavg_sparse, malpha*logkhalfdiff_sparse)
+  logktheta_sparse = mtheta*logk_sparse
+  
+  #logsnorm_sparse = tf.sparse_reduce_sum_sparse(logktheta_sparse, axis=0)
+  logsnorm_sparse = sparse_reduce_sum_sparse_0(logktheta_sparse)
+  
+  #logsnorm_sparse = sparse_reduce_sum_sparse_0t(logktheta_sparse)
+  #logsnorm_sparse = tf.sparse_reduce_sum(logktheta_sparse, axis=0)
+  
+  #lognorm_sparse = tf.sparse_reorder(lognorm_sparse)
+  logsnormnorm_sparse = tf.sparse_add(logsnorm_sparse,lognorm_sparse)
+  
+  snornorm_sparse = tf.SparseTensor(logsnormnorm_sparse.indices, tf.exp(logsnormnorm_sparse.values), logsnormnorm_sparse.get_shape())
+  #snornorm_sparse = tf.exp(logsnormnorm_sparse)
+  
+  mrnorm = tf.reshape(rnorm,[-1,1])
+  #snornorm_sparse = tf.SparseTensor(lognorm_sparse.indices, tf.exp(lognorm_sparse.values), lognorm_sparse.get_shape())
+  pnormfull_sparse = mrnorm*snornorm_sparse
+  
+  #pnormfull_sparse = tf.SparseTensor(lognorm_sparse.indices, tf.exp(lognorm_sparse.values), lognorm_sparse.get_shape())
+  
+  print("pnormfull_sparse shape")
+  print(pnormfull_sparse.get_shape())
+  nexpfull = tf.sparse_reduce_sum(pnormfull_sparse, axis=0)
+  #nexpfull = sparse_reduce_sum_0(pnormfull_sparse)
+  #print(nexpfull.shape)
+  #nexpfull = tf.reduce_sum(pnormfull_sparse, axis=0)
+  nexpfull.set_shape([nbinsfull])
+  
+  nexpfull = tf.Print(nexpfull,[tf.shape(logsnorm_sparse.values), tf.shape(lognorm_sparse.values)])
+
+  
+  pnormmasked_sparse = tf.sparse_slice(pnormfull_sparse,[0,nbins],[nsignals,nbinsmasked])
+  #print(pnormmasked_sparse.get_shape())
+  #pnormmasked_sparse = pnormfull_sparse[:nsignals,nbins:]
+  pmaskedexp = tf.sparse_reduce_sum(pnormmasked_sparse, axis=-1)
+  pmaskedexp.set_shape([nsignals])
+  #pmaskedexp = sparse_reduce_sum_m1(pnormmasked_sparse)
+  #pmaskedexp = tf.reduce_sum(pnormmasked_sparse, axis=-1)
+  
+  maskedexp = nexpfull[nbins:]
+
+  if nbinsmasked>0:
+    pmaskedexpnorm = tf.sparse_reduce_sum(pnormmasked_sparse/maskedexp, axis=-1)
+    pmaskedexpnorm.set_shape([nsignals])
+    #pmaskedexpnorm = sparse_reduce_sum_m1(pnormmasked_sparse/maskedexp, axis=-1)
+    #pmaskedexpnorm = tf.reduce_sum(pnormmasked_sparse/maskedexp, axis=-1)
+  else:
+    pmaskedexpnorm = pmaskedexp
+  
+else:
+  #matrix encoding effect of nuisance parameters
+  #memory efficient version (do summation together with multiplication in a single tensor contraction step)
+  #this is equivalent to 
+  #alpha = tf.reshape(alpha,[-1,1,1])
+  #theta = tf.reshape(theta,[-1,1,1])
+  #logk = logkavg + alpha*logkhalfdiff
+  #logktheta = theta*logk
+  #logsnorm = tf.reduce_sum(logktheta, axis=0)
+  alphatheta = alpha*theta  
+  logsnorm = tf.einsum('i,ijk->jk',theta,logkavg) + tf.einsum('i,ijk->jk',alphatheta,logkhalfdiff)
+
+  snorm = tf.exp(logsnorm)
+
+  #final expected yields per-bin including effect of signal
+  #strengths and nuisance parmeters
+  #memory efficient version (do summation together with multiplication in a single tensor contraction step)
+  #equivalent to (with some reshaping to explicitly match indices)
+  #rnorm = tf.reshape(rnorm,[-1,1])
+  #pnormfull = rnorm*snorm*norm
+  #nexpfull = tf.reduce_sum(pnormfull,axis=0)
+  nexpfull = tf.einsum('i,ij,ij->j',rnorm,snorm,norm)
+
+  #pnormmasked = pnormfull[:nsignals,nbins:]
+  #pmaskedexp = tf.reduce_sum(pnormmasked, axis=-1)
+  snormmasked = snorm[:nsignals,nbins:]
+  normmasked = norm[:nsignals,nbins:]
+  #pmaskedexp = tf.einsum('i,ij,ij->i',r,snormmasked,normmasked)
+  pmaskedexppartial = tf.einsum('ij,ij->i',snormmasked,normmasked)
+  pmaskedexp = r*pmaskedexppartial
+
+  #maskedexp = tf.reduce_sum(pnormmasked, axis=0,keepdims=True)
+  maskedexp = nexpfull[nbins:]
+
+  #if nbinsmasked>0:
+    #pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=-1)
+  #else:
+    #pmaskedexpnorm = pmaskedexp
+  pmaskedexpnormpartial = tf.einsum('ij,ij,j->i',snormmasked,normmasked,tf.reciprocal(maskedexp))
+  pmaskedexpnorm = r*pmaskedexpnormpartial
+ 
 nexp = nexpfull[:nbins]
 
 nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
@@ -200,25 +394,6 @@ lc = tf.reduce_sum(0.5*tf.square(theta - theta0))
 
 l = ln + lc
 lfull = lnfull + lc
-
-#pnormmasked = pnormfull[:nsignals,nbins:]
-#pmaskedexp = tf.reduce_sum(pnormmasked, axis=-1)
-snormmasked = snorm[:nsignals,nbins:]
-normmasked = norm[:nsignals,nbins:]
-#pmaskedexp = tf.einsum('i,ij,ij->i',r,snormmasked,normmasked)
-pmaskedexppartial = tf.einsum('ij,ij->i',snormmasked,normmasked)
-pmaskedexp = r*pmaskedexppartial
-
-#maskedexp = tf.reduce_sum(pnormmasked, axis=0,keepdims=True)
-maskedexp = nexpfull[nbins:]
-
-#if nbinsmasked>0:
-  #pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=-1)
-#else:
-  #pmaskedexpnorm = pmaskedexp
-#pmaskedexpnorm = tf.einsum('i,ij,ij,j->i',r,snormmasked,normmasked,tf.reciprocal(maskedexp))
-pmaskedexpnormpartial = tf.einsum('ij,ij,j->i',snormmasked,normmasked,tf.reciprocal(maskedexp))
-pmaskedexpnorm = r*pmaskedexpnormpartial
  
 #name outputs
 poi = tf.identity(poi, name=options.POIMode)
@@ -232,8 +407,15 @@ if nbinsmasked>0:
   outputs.append(pmaskedexp)
   outputs.append(pmaskedexpnorm)
 
+print("final grad")
 grad = tf.gradients(l,x,gate_gradients=True)[0]
+print("done")
+print("hess1")
+hess1 = tf.gradients(grad[1],x,gate_gradients=True)
+print('done')
+print("hessian")
 hessian = jacobian(grad,x,gate_gradients=True,parallel_iterations=1,back_prop=False)
+print("done")
 eigvals = tf.self_adjoint_eigvals(hessian)
 mineigv = tf.reduce_min(eigvals)
 isposdef = mineigv > 0.
@@ -471,6 +653,25 @@ for itoy in range(ntoys):
   sess.run(thetastartassign)
   #set likelihood offset
   sess.run(nexpnomassign)
+  
+  if sparse:
+    print(sess.run(tf.sparse_reduce_sum(logsnorm_sparse)))
+    print(sess.run(tf.reduce_min(logsnorm_sparse.values)))
+    print(sess.run(tf.sparse_reduce_max(logsnorm_sparse)))
+  else:
+    print(sess.run(tf.reduce_sum(logsnorm)))
+    print(sess.run(tf.reduce_min(logsnorm)))
+    print(sess.run(tf.reduce_max(logsnorm)))
+    
+  print(sess.run(tf.reduce_sum(nexp)))
+  print(sess.run(nexp))
+  print(sess.run(lfull))
+  print(sess.run(tf.gradients(l,x, gate_gradients=True)))
+  print(sess.run(tf.gradients(tf.gradients(l,x, gate_gradients=True)[0][0],x,gate_gradients=True)))
+  print(sess.run(tf.gradients(tf.gradients(l,x, gate_gradients=True)[0][1],x,gate_gradients=True)))
+
+  ##print(sess.run(hessian[0]))
+  #print(sess.run(hessian))
   
   if options.doBenchmark:
     neval = 10

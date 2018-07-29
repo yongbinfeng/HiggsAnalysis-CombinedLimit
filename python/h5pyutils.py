@@ -35,7 +35,7 @@ def validateChunkSize(h5dset):
     if c<s:
       isPartial = True
   
-  if h5dset.chunks[-1]<h5dset.shape[-1]:
+  if len(h5dset.shape)>1 and h5dset.chunks[-1]<h5dset.shape[-1]:
     raise Exception("Can't safely subdivide the last dimension, must increase cache size to get around this.")
   
   return True
