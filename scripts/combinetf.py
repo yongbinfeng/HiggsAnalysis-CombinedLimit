@@ -187,24 +187,59 @@ twox2 = twox*twox
 alpha =  0.125 * twox * (twox2 * (3*twox2 - 10.) + 15.)
 alpha = tf.clip_by_value(alpha,-1.,1.)
 
-def sparse_reduce_sum_sparse_0(in_sparse):  
-  indicespartial = in_sparse.indices[:,1:]
-  indicespartial_32 = tf.cast(indicespartial,tf.int32)
-  reduced_shape = in_sparse.get_shape()[1:]
+def flatten_indices(indices,shape):
+  if indices.dtype != tf.int32:
+    indices = tf.cast(indices,tf.int32)
   flat_shape = 1
-  for s in reduced_shape:
+  for s in shape:
     flat_shape *= int(s)
   flat_shape = (flat_shape,)
-  idxmodifier = tf.cumprod(reduced_shape, exclusive=True, reverse=True)
+  idxmodifier = tf.cumprod(shape, exclusive=True, reverse=True)
+  idxmodifier = tf.expand_dims(idxmodifier,-1)
+  indicesflat = tf.matmul(indices,idxmodifier)
+  indicesflat = tf.squeeze(indicesflat,-1)
+  return indicesflat
   
-  indicesflat = tf.einsum('j,ij->i',idxmodifier,indicespartial_32)
+def makeCache(x):
+  it = tf.data.Dataset.from_tensors(x).cache().repeat().make_initializable_iterator()
+  tf.add_to_collection('cache_initializers', it.initializer)
+  return it.get_next()
+
+def sparse_reduce_sum_sparse_0(in_sparse, ndims=1, doCache=True):    
+  reduced_shape = in_sparse.get_shape()[ndims:]
+  indicespartial = in_sparse.indices[:,ndims:]
+  indicesflat = flatten_indices(indicespartial, reduced_shape)
+  
   reduced_indices_flat, segment_ids = tf.unique(indicesflat)
+  reduced_size = tf.shape(reduced_indices_flat)[0]
   reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
-  reduced_indices_flat = tf.reshape(reduced_indices_flat,[-1,1])
-  reduced_values = tf.unsorted_segment_sum(in_sparse.values, segment_ids,tf.shape(reduced_indices_flat)[0])
-  reduced_sparse = tf.SparseTensor(reduced_indices_flat, reduced_values, flat_shape)
+  reduced_indices = tf.transpose(tf.unravel_index(reduced_indices_flat,reduced_shape))
+  reduced_indices = tf.Print(reduced_indices,[],message="computing indices")
+  
+  if doCache:
+    segment_ids, reduced_size, reduced_indices = makeCache((segment_ids, reduced_size, reduced_indices))
+    
+  reduced_values = tf.unsorted_segment_sum(in_sparse.values, segment_ids,reduced_size)
+  reduced_sparse = tf.SparseTensor(reduced_indices, reduced_values, reduced_shape)
   reduced_sparse = tf.sparse_reorder(reduced_sparse)
-  reduced_sparse = tf.sparse_reshape(reduced_sparse,reduced_shape)
+  return reduced_sparse
+
+def sparse_reduce_sum_sparse_m(in_sparse, ndims=1, doCache=True):    
+  reduced_shape = in_sparse.get_shape()[:ndims]
+  indicespartial = in_sparse.indices[:,:ndims]
+  indicesflat = flatten_indices(indicespartial, reduced_shape)
+  
+  reduced_indices_flat, segment_ids = tf.unique(indicesflat)
+  reduced_size = tf.shape(reduced_indices_flat)[0]
+  reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
+  reduced_indices = tf.transpose(tf.unravel_index(reduced_indices_flat,reduced_shape))
+  reduced_indices = tf.Print(reduced_indices,[],message="computing indices")
+  
+  if doCache:
+    segment_ids, reduced_size, reduced_indices = makeCache((segment_ids, reduced_size, reduced_indices))
+    
+  reduced_values = tf.segment_sum(in_sparse.values, segment_ids,reduced_size)
+  reduced_sparse = tf.SparseTensor(reduced_indices, reduced_values, reduced_shape)
   return reduced_sparse
 
 def sparse_reduce_sum_0(in_sparse):  
@@ -219,22 +254,18 @@ def sparse_reduce_sum_0(in_sparse):
   
   indicesflat = tf.einsum('j,ij->i',idxmodifier,indicespartial_32)
   segment_ids = indicesflat
-  #reduced_indices_flat, segment_ids = tf.unique(indicesflat)
   reduced_indices_flat = indicesflat
   reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
   reduced_indices_flat = tf.reshape(reduced_indices_flat,[-1,1])
   reduced_values = tf.unsorted_segment_sum(in_sparse.values, segment_ids,flat_shape[0])
   reduced = tf.reshape(reduced_values, reduced_shape)
-  #reduced_sparse = tf.SparseTensor(reduced_indices_flat, reduced_values, flat_shape)
-  #reduced_sparse = tf.sparse_reorder(reduced_sparse)
-  #reduced_sparse = tf.sparse_reshape(reduced_sparse,reduced_shape)
   return reduced
 
-def sparse_reduce_sum_m1(in_sparse):  
+def sparse_reduce_sum_m1(in_sparse, reduced_shape=None):  
   indicespartial = in_sparse.indices[:,:-1]
   indicespartial_32 = tf.cast(indicespartial,tf.int32)
-  #reduced_shape = in_sparse.get_shape()[:-1]
-  reduced_shape = (nsignals,)
+  if not reduced_shape:
+    reduced_shape = in_sparse.get_shape()[:-1]
   print(reduced_shape)
   flat_shape = 1
   for s in reduced_shape:
@@ -244,15 +275,15 @@ def sparse_reduce_sum_m1(in_sparse):
   
   indicesflat = tf.einsum('j,ij->i',idxmodifier,indicespartial_32)
   segment_ids = indicesflat
-  #reduced_indices_flat, segment_ids = tf.unique(indicesflat)
+  padsize = flat_shape[0] - (tf.reduce_max(segment_ids) + 1)
+  
   reduced_indices_flat = indicesflat
   reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
   reduced_indices_flat = tf.reshape(reduced_indices_flat,[-1,1])
-  reduced_values = tf.unsorted_segment_sum(in_sparse.values, segment_ids,flat_shape[0])
+  
+  reduced_values = tf.segment_sum(in_sparse.values, segment_ids)
+  reduced_values = tf.pad(reduced_values,[[0,padsize]])
   reduced = tf.reshape(reduced_values, reduced_shape)
-  #reduced_sparse = tf.SparseTensor(reduced_indices_flat, reduced_values, flat_shape)
-  #reduced_sparse = tf.sparse_reorder(reduced_sparse)
-  #reduced_sparse = tf.sparse_reshape(reduced_sparse,reduced_shape)
   return reduced
 
 def sparse_reduce_sum_sparse_0t(in_sparse):
@@ -277,55 +308,155 @@ def sparse_reduce_sum_sparse_0t(in_sparse):
   reduced_sparse = tf.sparse_reshape(reduced_sparse,reduced_shape)
   return reduced_sparse
 
+#def sparseexpmul(loga,b):
+  #vala = tf.exp(loga.values)
+  #indices = tf.where(tf.equal(loga.indices,b.indices
+
+def sparseexpmul(loga,b):
+  fullindices = tf.concat((b.indices,loga.indices),axis=0)
+  fullindices_32 = tf.cast(fullindices,tf.int32)
+  
+  b_size = int(b.indices.shape[0])
+  in_shape = b.get_shape()
+  flat_shape = 1
+  for s in in_shape:
+    flat_shape *= int(s)
+  flat_shape = (flat_shape,)
+  idxmodifier = tf.cumprod(in_shape, exclusive=True, reverse=True)
+  
+  indicesflat = tf.einsum('j,ij->i',idxmodifier,fullindices_32)
+  reduced_indices_flat, segment_ids, counts = tf.unique_with_counts(indicesflat)
+  segment_ids = segment_ids[b_size:]
+  counts = counts[:b_size]
+  
+  #print(b_size)
+  vala_size = (tf.reduce_max(segment_ids) + 1)
+  padsize = b_size - vala_size
+  vala_ones = tf.where(tf.equal(counts,1),tf.ones([vala_size],dtype=dtype), tf.zeros([vala_size],dtype=dtype))
+
+  vala = tf.exp(loga.values)
+  vala_out = tf.segment_sum(vala,segment_ids)  
+  vala_out = tf.pad(vala_out,[[0,padsize]])
+  val_out = (vala_out+vala_ones)*b.values
+  
+  reduced_sparse = tf.SparseTensor(b.indices,val_out,in_shape)
+  return reduced_sparse
+  
+def sparse_add_alt(a,b):
+  fullindices = tf.concat((a.indices,b.indices),axis=0)
+  fullvalues = tf.concat((a.values,b.values),axis=0)
+  fullindices_32 = tf.cast(fullindices,tf.int32)
+  
+  
+  in_shape = a.get_shape()
+  flat_shape = 1
+  for s in in_shape:
+    flat_shape *= int(s)
+  flat_shape = (flat_shape,)
+  idxmodifier = tf.cumprod(in_shape, exclusive=True, reverse=True)
+  
+  indicesflat = tf.einsum('j,ij->i',idxmodifier,fullindices_32)
+  reduced_indices_flat, segment_ids = tf.unique(indicesflat)
+  reduced_size = tf.shape(reduced_indices_flat)[0]
+  reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
+  reduced_indices_flat = tf.reshape(reduced_indices_flat,[-1,1])
+  reduced_values = tf.unsorted_segment_sum(fullvalues, segment_ids,reduced_size)
+  reduced_sparse = tf.SparseTensor(reduced_indices_flat, reduced_values, flat_shape)
+  reduced_sparse = tf.sparse_reorder(reduced_sparse)
+  reduced_sparse = tf.sparse_reshape(reduced_sparse,in_shape)
+  return reduced_sparse
+
+def sparse_add_bref(a,b):
+  fullindices = tf.concat((b.indices,a.indices),axis=0)
+  fullindices_32 = tf.cast(fullindices,tf.int32)
+  
+  b_size = int(b.indices.shape[0])
+  in_shape = b.get_shape()
+  flat_shape = 1
+  for s in in_shape:
+    flat_shape *= int(s)
+  flat_shape = (flat_shape,)
+  idxmodifier = tf.cumprod(in_shape, exclusive=True, reverse=True)
+  
+  indicesflat = tf.einsum('j,ij->i',idxmodifier,fullindices_32)
+  reduced_indices_flat, segment_ids = tf.unique(indicesflat)
+  segment_ids = segment_ids[b_size:]
+  
+  vala_out = tf.segment_sum(a.values,segment_ids)  
+  padsize = b_size - (tf.reduce_max(segment_ids) + 1)
+  vala_out = tf.pad(vala_out,[[0,padsize]])
+  val_out = vala_out + b.values
+
+  reduced_sparse = tf.SparseTensor(b.indices,val_out,in_shape)
+  return reduced_sparse
+
 if sparse:
   mtheta = tf.reshape(theta,[-1,1,1])
   malpha = tf.reshape(alpha,[-1,1,1])
   
-  logk_sparse = tf.sparse_add(logkavg_sparse, malpha*logkhalfdiff_sparse)
+  #logk_sparse = tf.sparse_add(logkavg_sparse, malpha*logkhalfdiff_sparse)
+  logk_sparse = sparse_add_alt(logkavg_sparse, malpha*logkhalfdiff_sparse)
   logktheta_sparse = mtheta*logk_sparse
   
   #logsnorm_sparse = tf.sparse_reduce_sum_sparse(logktheta_sparse, axis=0)
-  logsnorm_sparse = sparse_reduce_sum_sparse_0(logktheta_sparse)
+  logsnorm_sparse = sparse_reduce_sum_sparse_0(logktheta_sparse,doCache=True)
+  
+  #test = sparse_reduce_sum_sparse_0(logkavg_sparse,doCache=True)
   
   #logsnorm_sparse = sparse_reduce_sum_sparse_0t(logktheta_sparse)
   #logsnorm_sparse = tf.sparse_reduce_sum(logktheta_sparse, axis=0)
   
   #lognorm_sparse = tf.sparse_reorder(lognorm_sparse)
-  logsnormnorm_sparse = tf.sparse_add(logsnorm_sparse,lognorm_sparse)
+  #logsnormnorm_sparse = tf.sparse_add(logsnorm_sparse,lognorm_sparse)
+  #logsnormnorm_sparse = sparse_add_alt(logsnorm_sparse,lognorm_sparse)
   
-  snornorm_sparse = tf.SparseTensor(logsnormnorm_sparse.indices, tf.exp(logsnormnorm_sparse.values), logsnormnorm_sparse.get_shape())
-  #snornorm_sparse = tf.exp(logsnormnorm_sparse)
+  #snormnorm_sparse = tf.SparseTensor(logsnormnorm_sparse.indices, tf.exp(logsnormnorm_sparse.values), logsnormnorm_sparse.get_shape())
+  
+  norm_sparse = tf.SparseTensor(lognorm_sparse.indices, tf.exp(lognorm_sparse.values), lognorm_sparse.get_shape())
+  
+  #snorm_sparse = tf.SparseTensor(logsnorm_sparse.indices, tf.exp(logsnorm_sparse.values), logsnorm_sparse.get_shape())
+  
+  #snormnorm_sparse = sparseexpmul(logsnorm_sparse,lognorm_sparse)
   
   mrnorm = tf.reshape(rnorm,[-1,1])
   #snornorm_sparse = tf.SparseTensor(lognorm_sparse.indices, tf.exp(lognorm_sparse.values), lognorm_sparse.get_shape())
-  pnormfull_sparse = mrnorm*snornorm_sparse
+  #pnormfull_sparse = mrnorm*snormnorm_sparse
+  pnormfull_sparse = mrnorm*sparseexpmul(logsnorm_sparse,norm_sparse)
   
   #pnormfull_sparse = tf.SparseTensor(lognorm_sparse.indices, tf.exp(lognorm_sparse.values), lognorm_sparse.get_shape())
   
   print("pnormfull_sparse shape")
   print(pnormfull_sparse.get_shape())
-  nexpfull = tf.sparse_reduce_sum(pnormfull_sparse, axis=0)
-  #nexpfull = sparse_reduce_sum_0(pnormfull_sparse)
+  #nexpfull = tf.sparse_reduce_sum(pnormfull_sparse, axis=0)
+  #nexpfull_sparse = sparse_reduce_sum_sparse_0(pnormfull_sparse)
+  #nexpfull_sparse = sparse_reduce_sum_sparse_0t(pnormfull_sparse)
+  #nexpfull = tf.sparse_tensor_to_dense(nexpfull_sparse)
+  #nexpfull = tf.reshape(nexpfull,[nbinsfull])
+  nexpfull = sparse_reduce_sum_0(pnormfull_sparse)
   #print(nexpfull.shape)
   #nexpfull = tf.reduce_sum(pnormfull_sparse, axis=0)
-  nexpfull.set_shape([nbinsfull])
+  #nexpfull.set_shape([nbinsfull])
   
   nexpfull = tf.Print(nexpfull,[tf.shape(logsnorm_sparse.values), tf.shape(lognorm_sparse.values)])
 
   
   pnormmasked_sparse = tf.sparse_slice(pnormfull_sparse,[0,nbins],[nsignals,nbinsmasked])
+  #pnormmasked_sparse = tf.sparse_reset_shape(pnormmasked_sparse,[nsignals,nbinsmasked])
+  #print("pnormmasked_sparse shape:")
+  #print(pnormmasked_sparse.get_shape())
   #print(pnormmasked_sparse.get_shape())
   #pnormmasked_sparse = pnormfull_sparse[:nsignals,nbins:]
-  pmaskedexp = tf.sparse_reduce_sum(pnormmasked_sparse, axis=-1)
-  pmaskedexp.set_shape([nsignals])
-  #pmaskedexp = sparse_reduce_sum_m1(pnormmasked_sparse)
+  #pmaskedexp = tf.sparse_reduce_sum(pnormmasked_sparse, axis=-1)
+  #pmaskedexp.set_shape([nsignals])
+  pmaskedexp = sparse_reduce_sum_m1(pnormmasked_sparse,[nsignals])
   #pmaskedexp = tf.reduce_sum(pnormmasked_sparse, axis=-1)
   
   maskedexp = nexpfull[nbins:]
 
   if nbinsmasked>0:
-    pmaskedexpnorm = tf.sparse_reduce_sum(pnormmasked_sparse/maskedexp, axis=-1)
-    pmaskedexpnorm.set_shape([nsignals])
+    #pmaskedexpnorm = tf.sparse_reduce_sum(pnormmasked_sparse/maskedexp, axis=-1)
+    pmaskedexpnorm = tf.sparse_reduce_sum_m1(pnormmasked_sparse/maskedexp)
+    #pmaskedexpnorm.set_shape([nsignals])
     #pmaskedexpnorm = sparse_reduce_sum_m1(pnormmasked_sparse/maskedexp, axis=-1)
     #pmaskedexpnorm = tf.reduce_sum(pnormmasked_sparse/maskedexp, axis=-1)
   else:
@@ -340,7 +471,7 @@ else:
   #logk = logkavg + alpha*logkhalfdiff
   #logktheta = theta*logk
   #logsnorm = tf.reduce_sum(logktheta, axis=0)
-  alphatheta = alpha*theta  
+  alphatheta = alpha*theta
   logsnorm = tf.einsum('i,ijk->jk',theta,logkavg) + tf.einsum('i,ijk->jk',alphatheta,logkhalfdiff)
 
   snorm = tf.exp(logsnorm)
@@ -377,7 +508,8 @@ nexp = nexpfull[:nbins]
 nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
 lognexp = tf.log(nexpsafe)
 
-nexpnom = tf.Variable(nexp, trainable=False, name="nexpnom")
+#nexpnom = tf.Variable(nexp, trainable=False, name="nexpnom")
+nexpnom = tf.Variable(tf.zeros([nbins],dtype=dtype), trainable=False, name="nexpnom")
 nexpnomsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexpnom)
 lognexpnom = tf.log(nexpnomsafe)
 
@@ -410,12 +542,21 @@ if nbinsmasked>0:
 print("final grad")
 grad = tf.gradients(l,x,gate_gradients=True)[0]
 print("done")
-print("hess1")
-hess1 = tf.gradients(grad[1],x,gate_gradients=True)
-print('done')
-print("hessian")
+#print('hsum')
+#hsum = tf.gradients(grad,x, gate_gradients=True)
+#print('done')
+#print("grad1")
+#hess1 = grad[1]
+#gradcol = tf.reshape(grad,[-1,1])
+#hess1 = tf.gradients(grad[1],x,gate_gradients=True)
+#grad1 = tf.tensordot(grad,tf.one_hot(1,nparms,dtype=dtype),1)
+#print("hess1")
+#hess1 = tf.gradients(grad1,x,gate_gradients=True)
+#print('done')
+#print("hessian")
 hessian = jacobian(grad,x,gate_gradients=True,parallel_iterations=1,back_prop=False)
-print("done")
+#print("done")
+
 eigvals = tf.self_adjoint_eigvals(hessian)
 mineigv = tf.reduce_min(eigvals)
 isposdef = mineigv > 0.
@@ -594,9 +735,15 @@ if options.nThreads>0:
 else:
   config = None
 
+#initializers = []
+#initializers.append(globalinit)
+#initializers.extend(tf.get_collection("cache_initializers"))
+
 sess = tf.Session(config=config)
 #note that initializing all variables also triggers reading the hdf5 arrays from disk and populating the caches
+#sess.run(initializers)
 sess.run(globalinit)
+sess.run(tf.get_collection("cache_initializers"))
 xv = sess.run(x)
 
 #set likelihood offset
@@ -654,21 +801,24 @@ for itoy in range(ntoys):
   #set likelihood offset
   sess.run(nexpnomassign)
   
-  if sparse:
-    print(sess.run(tf.sparse_reduce_sum(logsnorm_sparse)))
-    print(sess.run(tf.reduce_min(logsnorm_sparse.values)))
-    print(sess.run(tf.sparse_reduce_max(logsnorm_sparse)))
-  else:
-    print(sess.run(tf.reduce_sum(logsnorm)))
-    print(sess.run(tf.reduce_min(logsnorm)))
-    print(sess.run(tf.reduce_max(logsnorm)))
+  #if sparse:
+    #print(sess.run(tf.sparse_reduce_sum(logsnorm_sparse)))
+    #print(sess.run(tf.reduce_min(logsnorm_sparse.values)))
+    #print(sess.run(tf.sparse_reduce_max(logsnorm_sparse)))
+  #else:
+    #print(sess.run(tf.reduce_sum(logsnorm)))
+    #print(sess.run(tf.reduce_min(logsnorm)))
+    #print(sess.run(tf.reduce_max(logsnorm)))
     
-  print(sess.run(tf.reduce_sum(nexp)))
-  print(sess.run(nexp))
-  print(sess.run(lfull))
-  print(sess.run(tf.gradients(l,x, gate_gradients=True)))
-  print(sess.run(tf.gradients(tf.gradients(l,x, gate_gradients=True)[0][0],x,gate_gradients=True)))
-  print(sess.run(tf.gradients(tf.gradients(l,x, gate_gradients=True)[0][1],x,gate_gradients=True)))
+  #print(sess.run(tf.reduce_sum(nexp)))
+  #print(sess.run(nexp))
+  #print(sess.run(lfull))
+  #print(sess.run(tf.gradients(l,x, gate_gradients=True)))
+  #print(sess.run(tf.gradients(tf.gradients(l,x, gate_gradients=True)[0][0],x,gate_gradients=True)))
+  #print(sess.run(tf.gradients(tf.gradients(l,x, gate_gradients=True)[0][1],x,gate_gradients=True)))
+  #print(sess.run(grad1))
+  #print(sess.run(hess1))
+  #print(sess.run(hsum))
 
   ##print(sess.run(hessian[0]))
   #print(sess.run(hessian))
