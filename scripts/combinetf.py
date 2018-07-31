@@ -193,7 +193,7 @@ if sparse:
   maskedexp = nexpfull[nbins:]
 
   if nbinsmasked>0:
-    pmaskedexpnorm = tf.sparse_reduce_sum_0(pnormmasked_sparse/maskedexp,doCache=True)
+    pmaskedexpnorm = sparse_reduce_sum_0(pnormmasked_sparse/maskedexp,reduced_shape=[nsignals],doCache=True)
   else:
     pmaskedexpnorm = pmaskedexp
   
@@ -486,11 +486,14 @@ else:
 sess = tf.Session(config=config)
 #note that initializing all variables also triggers reading the hdf5 arrays from disk and populating the caches
 #sess.run(initializers)
+print("initializing variables")
 sess.run(globalinit)
+print("initializing operations caches")
 for cacheinit in tf.get_collection("cache_initializers"):
   sess.run(cacheinit)
 xv = sess.run(x)
 
+print("set likelihood offset (and trigger initialization of input from disk and caches)")
 #set likelihood offset
 sess.run(nexpnomassign)
 
