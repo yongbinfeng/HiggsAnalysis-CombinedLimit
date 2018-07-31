@@ -19,7 +19,7 @@ def makeCache(x):
   tf.add_to_collection('cache_initializers', it.initializer)
   return it.get_next()
 
-def sparse_reduce_sum_sparse_0(in_sparse, ndims=1, doCache=True):    
+def sparse_reduce_sum_sparse_0(in_sparse, ndims=1, doCache=False):    
   reduced_shape = in_sparse.get_shape()[ndims:]
   indicespartial = in_sparse.indices[:,ndims:]
   indicesflat,_ = flatten_indices(indicespartial, reduced_shape)
@@ -58,8 +58,8 @@ def sparse_reduce_sum_sparse_m(in_sparse, ndims=1, doCache=False):
   reduced_sparse = tf.SparseTensor(reduced_indices, reduced_values, reduced_shape)
   return reduced_sparse
 
-def sparse_reduce_sum_0(in_sparse, ndims=1, reduced_shape=None, doCache=True):
-  if not reduced_shape:
+def sparse_reduce_sum_0(in_sparse, ndims=1, reduced_shape=None, doCache=False):
+  if reduced_shape is None:
     reduced_shape = in_sparse.get_shape()[:-ndims]  
   indicespartial = in_sparse.indices[:,ndims:]
   indicesflat,flat_size = flatten_indices(indicespartial, reduced_shape)
@@ -73,8 +73,8 @@ def sparse_reduce_sum_0(in_sparse, ndims=1, reduced_shape=None, doCache=True):
   reduced = tf.reshape(reduced_values, reduced_shape)
   return reduced
 
-def sparse_reduce_sum_m(in_sparse, ndims = 1, reduced_shape=None, doCache=True):
-  if not reduced_shape:
+def sparse_reduce_sum_m(in_sparse, ndims = 1, reduced_shape=None, doCache=False):
+  if reduced_shape is None:
     reduced_shape = in_sparse.get_shape()[:-ndims]  
   indicespartial = in_sparse.indices[:,:-ndims]
   indicesflat,flat_size = flatten_indices(indicespartial, reduced_shape)

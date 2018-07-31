@@ -172,35 +172,28 @@ twox2 = twox*twox
 alpha =  0.125 * twox * (twox2 * (3*twox2 - 10.) + 15.)
 alpha = tf.clip_by_value(alpha,-1.,1.)
 
-#thetaalpha = theta*alpha
-#mthetaalpha = tf.stack([theta,alpha],axis=0)
-
-mthetaalpha = tf.stack([theta,alpha],axis=-1) #now has shape [nsyst,2]
+thetaalpha = theta*alpha
+mthetaalpha = tf.stack([theta,thetaalpha],axis=-1) #now has shape [nsyst,2]
 
 if sparse:
   mthetaalpha = tf.expand_dims(mthetaalpha,0) #now has shape [1,nsyst,2]
   mthetaalpha = tf.expand_dims(mthetaalpha,0) #now has shape [1,1,nsyst,2]
   
   logktheta_sparse = mthetaalpha*logk_sparse
-  logsnorm_sparse = sparse_reduce_sum_sparse_m(logktheta_sparse,ndims=2,doCache=False)
+  logsnorm_sparse = sparse_reduce_sum_sparse_m(logktheta_sparse,ndims=2,doCache=True)
   
-  #mrnorm = tf.reshape(rnorm,[-1,1])
   mrnorm = tf.expand_dims(rnorm,0) #now has shape [1,nproc]
-  pnormfull_sparse = mrnorm*sparseexpmul(logsnorm_sparse,norm_sparse,doCache=False)
+  pnormfull_sparse = mrnorm*sparseexpmul(logsnorm_sparse,norm_sparse,doCache=True)
   
-  nexpfull = sparse_reduce_sum_m(pnormfull_sparse)
+  nexpfull = sparse_reduce_sum_m(pnormfull_sparse,doCache=True)
 
   pnormmasked_sparse = tf.sparse_slice(pnormfull_sparse,[nsignals,nbinsmasked],[0,nbins])
-  pmaskedexp = sparse_reduce_sum_0(pnormmasked_sparse,reduced_shape=[nsignals],doCache=False)
+  pmaskedexp = sparse_reduce_sum_0(pnormmasked_sparse,reduced_shape=[nsignals],doCache=True)
   
   maskedexp = nexpfull[nbins:]
 
   if nbinsmasked>0:
-    #pmaskedexpnorm = tf.sparse_reduce_sum(pnormmasked_sparse/maskedexp, axis=-1)
-    pmaskedexpnorm = tf.sparse_reduce_sum_0(pnormmasked_sparse/maskedexp,doCache=False)
-    #pmaskedexpnorm.set_shape([nsignals])
-    #pmaskedexpnorm = sparse_reduce_sum_m1(pnormmasked_sparse/maskedexp, axis=-1)
-    #pmaskedexpnorm = tf.reduce_sum(pnormmasked_sparse/maskedexp, axis=-1)
+    pmaskedexpnorm = tf.sparse_reduce_sum_0(pnormmasked_sparse/maskedexp,doCache=True)
   else:
     pmaskedexpnorm = pmaskedexp
   
@@ -215,7 +208,12 @@ else:
   #logsnorm = tf.reduce_sum(logktheta, axis=0)
   #logsnorm = tf.einsum('i,ijk->jk',theta,logkavg) + tf.einsum('i,ijk->jk',alphatheta,logkhalfdiff)
   
-  logsnorm = tf.einsum('kl,ijkl->ij', mthetaalpha, logk)
+  #logsnorm = tf.einsum('kl,ijkl->ij', mthetaalpha, logk)
+  
+  mthetaalpha = tf.reshape(mthetaalpha,[-1,1])
+  mlogk = tf.reshape(logk,[-1,2*nsyst])
+  logsnorm = tf.matmul(mlogk,mthetaalpha)
+  logsnorm = tf.reshape(logsnorm,[nbinsfull,nproc])
 
   snorm = tf.exp(logsnorm)
 
@@ -223,10 +221,14 @@ else:
   #strengths and nuisance parmeters
   #memory efficient version (do summation together with multiplication in a single tensor contraction step)
   #equivalent to (with some reshaping to explicitly match indices)
-  #rnorm = tf.reshape(rnorm,[-1,1])
+  #rnorm = tf.reshape(rnorm,[1,-1])
   #pnormfull = rnorm*snorm*norm
-  #nexpfull = tf.reduce_sum(pnormfull,axis=0)
-  nexpfull = tf.einsum('j,ij,ij->i',rnorm,snorm,norm)
+  #nexpfull = tf.reduce_sum(pnormfull,axis=-1)
+  #nexpfull = tf.einsum('j,ij,ij->i',rnorm,snorm,norm)
+  mrnorm = tf.reshape(rnorm,[-1,1])
+  mrnorm = tf.expand_dims(rnorm,-1)
+  nexpfull = tf.matmul(snorm*norm, mrnorm)
+  nexpfull = tf.squeeze(nexpfull,-1)
 
   #pnormmasked = pnormfull[:nsignals,nbins:]
   #pmaskedexp = tf.reduce_sum(pnormmasked, axis=-1)
@@ -251,7 +253,6 @@ nexp = nexpfull[:nbins]
 nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
 lognexp = tf.log(nexpsafe)
 
-#nexpnom = tf.Variable(nexp, trainable=False, name="nexpnom")
 nexpnom = tf.Variable(tf.zeros([nbins],dtype=dtype), trainable=False, name="nexpnom")
 nexpnomsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexpnom)
 lognexpnom = tf.log(nexpnomsafe)
@@ -486,7 +487,8 @@ sess = tf.Session(config=config)
 #note that initializing all variables also triggers reading the hdf5 arrays from disk and populating the caches
 #sess.run(initializers)
 sess.run(globalinit)
-sess.run(tf.get_collection("cache_initializers"))
+for cacheinit in tf.get_collection("cache_initializers"):
+  sess.run(cacheinit)
 xv = sess.run(x)
 
 #set likelihood offset

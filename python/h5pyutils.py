@@ -80,7 +80,7 @@ def writeInChunks(arr, h5group, outname, maxChunkBytes = 1024**2):
     #write data from exactly one complete chunk
     aout = arr[readslices]
     #no need to explicitly write chunk if it contains only zeros
-    if np.count_nonzero(arr):
+    if np.count_nonzero(aout):
       h5dset[readslices] = aout
       
   return h5dset

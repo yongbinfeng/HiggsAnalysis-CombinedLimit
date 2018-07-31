@@ -102,6 +102,7 @@ for chan in DC.bins:
     chans.append(chan)
     maskedchans.append(chan)
 
+print("nproc = %d, nsyst = %d" % (nproc,nsyst))
 
 #fill data, expected yields, and kappas into HDF5 file (with chunked storage and compression)
 
@@ -312,6 +313,21 @@ for chan in chans:
 
 nbinsfull = ibin
 
+print("nproc = %d, nsyst = %d, nbinsfull = %d" % (nproc,nsyst,nbinsfull))
+
+#sort sparse arrays into canonical order
+if options.sparse:
+  norm_shape = (nbinsfull, nproc)
+  norm_sort_indices = np.argsort(np.ravel_multi_index(np.transpose(norm_sparse_indices),norm_shape))
+  norm_sparse_indices = norm_sparse_indices[norm_sort_indices]
+  norm_sparse_values = norm_sparse_values[norm_sort_indices]
+  norm_sort_indices = None
+  
+  logk_shape = (nbinsfull, nproc, nsyst, 2)
+  logk_sort_indices = np.argsort(np.ravel_multi_index(np.transpose(logk_sparse_indices),logk_shape))
+  logk_sparse_indices = logk_sparse_indices[logk_sort_indices]
+  logk_sparse_values = logk_sparse_values[logk_sort_indices]
+  logk_sort_indices = None
 
 #write results to hdf5 file
 
@@ -348,17 +364,22 @@ writeInChunks(data_obs, f, "hdata_obs", maxChunkBytes = chunkSize)
 if options.sparse:
   hnorm_sparse = f.create_group("hnorm_sparse")
   writeInChunks(norm_sparse_indices, hnorm_sparse, "indices", maxChunkBytes = chunkSize)
+  norm_sparse_indices = None
   writeInChunks(norm_sparse_values, hnorm_sparse, "values", maxChunkBytes = chunkSize)
+  norm_sparse_values = None
   hnorm_sparse_dense_shape = hnorm_sparse.create_dataset("dense_shape", [2], dtype="int64", compression="gzip")
-  hnorm_sparse_dense_shape[...] = [nbinsfull, nproc]
+  hnorm_sparse_dense_shape[...] = norm_shape
   
   hlogk_sparse = f.create_group("hlogk_sparse")
   writeInChunks(logk_sparse_indices, hlogk_sparse, "indices", maxChunkBytes = chunkSize)
+  logk_sparse_indices = None
   writeInChunks(logk_sparse_values, hlogk_sparse, "values", maxChunkBytes = chunkSize)
+  logk_sparse_values = None
   hlogk_sparse_dense_shape = hlogk_sparse.create_dataset("dense_shape", [4], dtype="int64", compression="gzip")
-  hlogk_sparse_dense_shape[...] = [nbinsfull, nproc, nsyst, 2]  
+  hlogk_sparse_dense_shape[...] = logk_shape
 
 else:
   writeInChunks(norm, f, "hnorm", maxChunkBytes = chunkSize)
+  norm = None
   writeInChunks(logk, f, "hlogk", maxChunkBytes = chunkSize)
-
+  logk = None
