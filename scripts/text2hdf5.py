@@ -6,7 +6,7 @@ from optparse import OptionParser
 import numpy as np
 import h5py
 import h5py_cache
-from HiggsAnalysis.CombinedLimit.h5pyutils import makeChunkSize,validateChunkSize
+from HiggsAnalysis.CombinedLimit.h5pyutils import makeChunkSize,validateChunkSize,writeInChunks
 import math
 
 
@@ -24,7 +24,7 @@ from HiggsAnalysis.CombinedLimit.DatacardParser import *
 from HiggsAnalysis.CombinedLimit.ModelTools import *
 from HiggsAnalysis.CombinedLimit.ShapeTools import *
 from HiggsAnalysis.CombinedLimit.PhysicsModel import *
-from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface
+
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 addDatacardParserOptions(parser)
@@ -105,41 +105,227 @@ for chan in DC.bins:
 
 #fill data, expected yields, and kappas into HDF5 file (with chunked storage and compression)
 
+#fill data, expected yields, and kappas into numpy arrays
+
 #n.b data and expected have shape [nbins]
 
-#norm has shape [nprocs,nbinsfull] and keeps track of expected normalization
+#norm has shape [nbinsfull, nproc] and keeps track of expected normalization
 
-#logkup/down have shape [nsyst, nprocs, nbinsfull] and keep track of systematic variations
+#logk has shape [nbinsfull, nproc, nsyst, 2] and keep track of systematic variations
 #per nuisance-parameter, per-process, per-bin
+#the last dimension of size 2 indexes "logkavg" and "logkhalfdiff" for asymmetric uncertainties
+#where logkavg = 0.5*(logkup + logkdown) and logkhalfdiff = 0.5*(logkup - logkdown)
 
 #n.b, in case of masked channels, nbinsfull includes the masked channels where nbins does not
 
-#first loop through observed data to determine the total number of bins
-nbinsfull = 0
-nbinsmasked = 0
-nbinschans = []
-for chan in chans:
-  if chan in options.maskedChan:
-    nbinschan = 1
-    nbinsmasked += nbinschan
-  else:
-    #exclude overflow/underflow bins
-    nbinschan = MB.getShape(chan,"data_obs").GetSize() - 2
-  
-  nbinschans.append(nbinschan)
-  nbinsfull += nbinschan
-  
-nbins = nbinsfull - nbinsmasked
+data_obs = np.zeros([0], dtype)
 
-chunkSize = options.chunkSize
-binsSize = nbinsfull*np.dtype(dtype).itemsize
-if binsSize > chunkSize:
-  print("Warning: size of a single histogram is larger than the specified chunk size, increasing chunk size to %d to match" % binsSize)
-  chunkSize = binsSize
+if options.sparse:
+  norm_sparse_indices = np.zeros([0,2],'int64')
+  norm_sparse_values = np.zeros([0],dtype)
+  
+  logk_sparse_indices = np.zeros([0,4],'int64')
+  logk_sparse_values = np.zeros([0],dtype)
+else:
+  norm = np.zeros([0,nproc], dtype)
+  logk = np.zeros([0,nproc,nsyst,2], dtype)
+
+#fill data_obs, norm, and logk
+#numerical cutoff in case of zeros in systematic variations
+logkepsilon = math.log(1e-3)
+#counter to keep track of current bin being written
+ibin = 0
+for chan in chans:
+  print(chan)
+
+  if not chan in options.maskedChan:
+    #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
+    data_obs_chan = np.array(MB.getShape(chan,"data_obs")).astype(dtype)[1:-1]
+    nbinschan = data_obs_chan.shape[0]
+    #resize output array
+    data_obs.resize([ibin+nbinschan])
+    #write to output array
+    data_obs[ibin:] = data_obs_chan
+    data_obs_chan = None
+  else:
+    nbinschan = 1
+    
+  #resize norm and logk tenors
+  if not options.sparse:
+    norm.resize([ibin+nbinschan, nproc])
+    logk.resize([ibin+nbinschan, nproc, nsyst, 2])
+  
+  expchan = DC.exp[chan]
+  for iproc,proc in enumerate(procs):
+    hasproc = proc in expchan
+    
+    if not hasproc:
+      continue
+    
+    #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
+    norm_chan = np.array(MB.getShape(chan,proc)).astype(dtype)[1:-1]
+    if norm_chan.shape[0] != nbinschan:
+      raise Exception("Mismatch between number of bins in channel for data and template")
+    
+    if not options.allowNegativeExpectation:
+      norm_chan = np.maximum(norm_chan,0.)
+    
+    if options.sparse:
+      norm_chan_indices = np.transpose(np.nonzero(norm_chan))
+      norm_chan_values = np.reshape(norm_chan[norm_chan_indices],[-1])
+      
+      print("iproc = %d, chan = %s, sparse length = %d" % (iproc,chan,len(norm_chan_values)))
+      
+      nvals_chan = len(norm_chan_values)
+      oldlength = norm_sparse_indices.shape[0]
+      newlength = oldlength + nvals_chan
+      
+      out_indices = np.array([[ibin,iproc]]) + np.pad(norm_chan_indices,((0,0),(0,1)),'constant')
+      norm_chan_indices = None
+      
+      norm_sparse_indices.resize([newlength,2])
+      norm_sparse_indices[oldlength:] = out_indices
+      out_indices = None
+      
+      norm_sparse_values.resize([newlength])
+      norm_sparse_values[oldlength:] = norm_chan_values
+      norm_chan_values = None
+
+    else:
+      #write to (dense) output array
+      norm[ibin:,iproc] = norm_chan
+        
+    
+    for isyst,syst in enumerate(DC.systs[:nsyst]):
+      name = syst[0]
+      stype = syst[2]
+  
+      print(name)
+      
+      if stype=='lnN':
+        ksyst = syst[4][chan][proc]
+        if type(ksyst) is list:
+          ksystup = ksyst[1]
+          ksystdown = ksyst[0]
+          if ksystup == 0. and ksystdown==0.:
+            continue
+          if ksystup == 0.:
+            ksystup = 1.
+          if ksystdown == 0.:
+            ksystdown = 1.
+          logkup_chan = math.log(ksystup)*np.ones([nbinschan],dtype=dtype)
+          logkdown_chan = -math.log(ksystdown)*np.ones([nbinschan],dtype=dtype)
+          logkavg_chan = 0.5*(logkup_chan + logkdown_chan)
+          logkhalfdiff_chan = 0.5*(logkup_chan - logkdown_chan)
+          logkup_chan = None
+          logkdown_chan = None
+        else:
+          if ksyst == 0.:
+            continue
+          logkavg_chan = math.log(ksyst)*np.ones([nbinschan],dtype=dtype)
+          logkhalfdiff_chan = np.zeros([nbinschan],dtype=dtype)
+      elif 'shape' in stype:
+        kfac = syst[4][chan][proc]
+        
+        # TODO check if it should be rather if kfac <= 0. ?
+        if kfac == 0.:
+          continue
+        
+        systup_chan = np.array(MB.getShape(chan,proc,name+"Up")).astype(dtype)[1:-1]
+        if systup_chan.shape[0] != nbinschan:
+          raise Exception("Mismatch between number of bins in channel for data and systematic variation template")
+        logkup_chan = kfac*np.log(systup_chan/norm_chan)
+        logkup_chan = np.where(np.equal(np.sign(norm_chan*systup_chan),1), logkup_chan, logkepsilon*np.ones_like(logkup_chan))
+        systup_chan = None
+        
+        systdown_chan = np.array(MB.getShape(chan,proc,name+"Down")).astype(dtype)[1:-1]
+        if systdown_chan.shape[0] != nbinschan:
+          raise Exception("Mismatch between number of bins in channel for data and systematic variation template")
+        logkdown_chan = -kfac*np.log(systdown_chan/norm_chan)
+        logkdown_chan = np.where(np.equal(np.sign(norm_chan*systdown_chan),1), logkdown_chan, -logkepsilon*np.ones_like(logkdown_chan))
+        systdown_chan = None
+        
+        logkavg_chan = 0.5*(logkup_chan + logkdown_chan)
+        logkhalfdiff_chan = 0.5*(logkup_chan - logkdown_chan)
+        logkup_chan = None
+        logkdown_chan = None
+          
+      #ensure that systematic tensor is sparse where normalization matrix is sparse
+      logkavg_chan = np.where(np.equal(norm_chan,0.), 0., logkavg_chan)
+      logkhalfdiff_chan = np.where(np.equal(norm_chan,0.), 0., logkhalfdiff_chan)
+      
+      if options.sparse:
+        logkavg_chan_indices = np.transpose(np.nonzero(logkavg_chan))
+        logkavg_chan_values = np.reshape(logkavg_chan[logkavg_chan_indices],[-1])
+        
+        print("isyst, = %d, iproc = %d, chan = %s, sparse length avg = %d" % (isyst, iproc,chan,len(logkavg_chan_values)))
+        
+        nvals_chan = len(logkavg_chan_values)
+        oldlength = logk_sparse_indices.shape[0]
+        newlength = oldlength + nvals_chan
+        
+        out_indices = np.array([[ibin,iproc,isyst,0]]) + np.pad(logkavg_chan_indices,((0,0),(0,3)),'constant')
+        logkavg_chan_indices = None
+        
+        logk_sparse_indices.resize([newlength,4])
+        logk_sparse_indices[oldlength:] = out_indices
+        out_indices = None
+        
+        logk_sparse_values.resize([newlength])
+        logk_sparse_values[oldlength:] = logkavg_chan_values
+        logkavg_chan_values = None
+        
+        logkhalfdiff_chan_indices = np.transpose(np.nonzero(logkhalfdiff_chan))
+        logkhalfdiff_chan_values = np.reshape(logkhalfdiff_chan[logkhalfdiff_chan_indices],[-1])
+        
+        print("isyst, = %d, iproc = %d, chan = %s, sparse length diff = %d" % (isyst, iproc,chan,len(logkhalfdiff_chan_values)))
+        
+        nvals_chan = len(logkhalfdiff_chan_values)
+        oldlength = logk_sparse_indices.shape[0]
+        newlength = oldlength + nvals_chan
+        
+        out_indices = np.array([[ibin,iproc,isyst,1]]) + np.pad(logkhalfdiff_chan_indices,((0,0),(0,3)),'constant')
+        logkhalfdiff_chan_indices = None
+        
+        logk_sparse_indices.resize([newlength,4])
+        logk_sparse_indices[oldlength:] = out_indices
+        out_indices = None
+        
+        logk_sparse_values.resize([newlength])
+        logk_sparse_values[oldlength:] = logkhalfdiff_chan_values
+        logkhalfdiff_chan_values = None        
+      else:
+        #write to dense output array
+        logk[ibin:,iproc,isyst,0] = logkavg_chan
+        logk[ibin:,iproc,isyst,1] = logkhalfdiff_chan
+      
+      #free memory
+      logkavg_chan = None
+      logkhalfdiff_chan = None    
+    
+    #free memory
+    norm_chan = None
+    
+  
+  #increment counter
+  ibin += nbinschan
+
+nbinsfull = ibin
+
+
+#write results to hdf5 file
+
+procSize = nproc*np.dtype(dtype).itemsize
+systSize = 2*nsyst*np.dtype(dtype).itemsize
+chunkSize = np.amax([options.chunkSize,procSize,systSize])
+if chunkSize > options.chunkSize:
+  print("Warning: Maximum chunk size in bytes was increased from %d to %d to align with tensor sizes and allow more efficient reading/writing." % (options.chunkSize, chunkSize))
 
 
 #create HDF5 file (chunk cache set to the chunk size since we can guarantee fully aligned writes
 outfilename = options.out.replace('.root','.hdf5')
+if options.sparse:
+  outfilename = outfilename.replace('.hdf5','_sparse.hdf5')
 f = h5py_cache.File(outfilename, chunk_cache_mem_size=chunkSize, mode='w')
 
 #save some lists of strings to the file for later use
@@ -156,271 +342,23 @@ hmaskedchans = f.create_dataset("hmaskedchans", [len(maskedchans)], dtype=h5py.s
 hmaskedchans[...] = maskedchans
 
 #create h5py datasets with optimized chunk shapes
-data_obs_shape = [nbins]
-data_obs_chunks = makeChunkSize(data_obs_shape, dtype, maxbytes = chunkSize)
-hdata_obs = f.create_dataset("hdata_obs", data_obs_shape, chunks=data_obs_chunks, dtype=dtype, compression="gzip")
-validateChunkSize(hdata_obs)
 
-norm_shape = [nproc,nbinsfull]
-norm_chunks = makeChunkSize(norm_shape, dtype, maxbytes = chunkSize)
-hnorm = f.create_dataset("hnorm", norm_shape, chunks=norm_chunks, dtype=dtype, compression="gzip")
-validateChunkSize(hnorm)
-
-logk_shape = [nsyst,nproc,nbinsfull]
-
+writeInChunks(data_obs, f, "hdata_obs", maxChunkBytes = chunkSize)
 
 if options.sparse:
-  hlognorm_sparse = f.create_group("hlognorm_sparse")
+  hnorm_sparse = f.create_group("hnorm_sparse")
+  writeInChunks(norm_sparse_indices, hnorm_sparse, "indices", maxChunkBytes = chunkSize)
+  writeInChunks(norm_sparse_values, hnorm_sparse, "values", maxChunkBytes = chunkSize)
+  hnorm_sparse_dense_shape = hnorm_sparse.create_dataset("dense_shape", [2], dtype="int64", compression="gzip")
+  hnorm_sparse_dense_shape[...] = [nbinsfull, nproc]
   
-  hlognorm_sparse_indices_shape = [0,2]
-  hlognorm_sparse_indices_maxshape = [nproc*nbinsfull,2]
-  hlognorm_sparse_indices_chunks = makeChunkSize(hlognorm_sparse_indices_maxshape,"int64",maxbytes=chunkSize)
-  hlognorm_sparse_indices = hlognorm_sparse.create_dataset("indices",hlognorm_sparse_indices_shape,dtype="int64",maxshape=hlognorm_sparse_indices_maxshape,chunks=hlognorm_sparse_indices_chunks, compression="gzip")
-  
-  hlognorm_sparse_values_shape = [0]
-  hlognorm_sparse_values_maxshape = [nproc*nbinsfull]
-  hlognorm_sparse_values_chunks = makeChunkSize(hlognorm_sparse_values_maxshape,dtype,maxbytes=chunkSize)
-  hlognorm_sparse_values = hlognorm_sparse.create_dataset("values",hlognorm_sparse_values_shape,dtype=dtype,maxshape=hlognorm_sparse_values_maxshape,chunks=hlognorm_sparse_values_chunks, compression="gzip")
-
-  hlognorm_sparse_dense_shape = hlognorm_sparse.create_dataset("dense_shape", [2], dtype="int64", compression="gzip")
-  hlognorm_sparse_dense_shape[...] = norm_shape
-  
-  
-  hlogkavg_sparse = f.create_group("hlogkavg_sparse")
-  
-  hlogkavg_sparse_indices_shape = [0,3]
-  hlogkavg_sparse_indices_maxshape = [nsyst*nproc*nbinsfull,3]
-  hlogkavg_sparse_indices_chunks = makeChunkSize(hlogkavg_sparse_indices_maxshape,"int64",maxbytes=chunkSize)
-  hlogkavg_sparse_indices = hlogkavg_sparse.create_dataset("indices",hlogkavg_sparse_indices_shape,dtype="int64",maxshape=hlogkavg_sparse_indices_maxshape,chunks=hlogkavg_sparse_indices_chunks, compression="gzip")
-  
-  hlogkavg_sparse_values_shape = [0]
-  hlogkavg_sparse_values_maxshape = [nsyst*nproc*nbinsfull]
-  hlogkavg_sparse_values_chunks = makeChunkSize(hlogkavg_sparse_values_maxshape,dtype,maxbytes=chunkSize)
-  hlogkavg_sparse_values = hlogkavg_sparse.create_dataset("values",hlogkavg_sparse_values_shape,dtype=dtype,maxshape=hlogkavg_sparse_values_maxshape,chunks=hlogkavg_sparse_values_chunks, compression="gzip")
-
-  hlogkavg_sparse_dense_shape = hlogkavg_sparse.create_dataset("dense_shape", [3], dtype="int64", compression="gzip")
-  hlogkavg_sparse_dense_shape[...] = logk_shape 
-  
-  
-  hlogkhalfdiff_sparse = f.create_group("hlogkhalfdiff_sparse")
-  
-  hlogkhalfdiff_sparse_indices_shape = [0,3]
-  hlogkhalfdiff_sparse_indices_maxshape = [nsyst*nproc*nbinsfull,3]
-  hlogkhalfdiff_sparse_indices_chunks = makeChunkSize(hlogkhalfdiff_sparse_indices_maxshape,"int64",maxbytes=chunkSize)
-  hlogkhalfdiff_sparse_indices = hlogkhalfdiff_sparse.create_dataset("indices",hlogkhalfdiff_sparse_indices_shape,dtype="int64",maxshape=hlogkhalfdiff_sparse_indices_maxshape,chunks=hlogkhalfdiff_sparse_indices_chunks, compression="gzip")
-  
-  hlogkhalfdiff_sparse_values_shape = [0]
-  hlogkhalfdiff_sparse_values_maxshape = [nsyst*nproc*nbinsfull]
-  hlogkhalfdiff_sparse_values_chunks = makeChunkSize(hlogkhalfdiff_sparse_values_maxshape,dtype,maxbytes=chunkSize)
-  hlogkhalfdiff_sparse_values = hlogkhalfdiff_sparse.create_dataset("values",hlogkhalfdiff_sparse_values_shape,dtype=dtype,maxshape=hlogkhalfdiff_sparse_values_maxshape,chunks=hlogkhalfdiff_sparse_values_chunks, compression="gzip")
-
-  hlogkhalfdiff_sparse_dense_shape = hlogkhalfdiff_sparse.create_dataset("dense_shape", [3], dtype="int64", compression="gzip")
-  hlogkhalfdiff_sparse_dense_shape[...] = logk_shape  
+  hlogk_sparse = f.create_group("hlogk_sparse")
+  writeInChunks(logk_sparse_indices, hlogk_sparse, "indices", maxChunkBytes = chunkSize)
+  writeInChunks(logk_sparse_values, hlogk_sparse, "values", maxChunkBytes = chunkSize)
+  hlogk_sparse_dense_shape = hlogk_sparse.create_dataset("dense_shape", [4], dtype="int64", compression="gzip")
+  hlogk_sparse_dense_shape[...] = [nbinsfull, nproc, nsyst, 2]  
 
 else:
-  logk_chunks = makeChunkSize(logk_shape, dtype, maxbytes = chunkSize)
-  logkcompression = "gzip"
-  #compression not needed for empty arrays and breaks chunking logic
-  if nsyst == 0:
-    logkcompression = None
-  hlogkavg = f.create_dataset("hlogkavg", logk_shape, chunks=logk_chunks, dtype=dtype, compression=logkcompression)
-  hlogkhalfdiff = f.create_dataset("hlogkhalfdiff", logk_shape, chunks=logk_chunks, dtype=dtype, compression=logkcompression)
-  if nsyst>0:
-    validateChunkSize(hlogkavg)
-    validateChunkSize(hlogkhalfdiff)
+  writeInChunks(norm, f, "hnorm", maxChunkBytes = chunkSize)
+  writeInChunks(logk, f, "hlogk", maxChunkBytes = chunkSize)
 
-#fill data_obs
-#counter to keep track of current bin being written
-ibin = 0
-for chan in chans:
-  print(chan)
-  if not chan in options.maskedChan:
-    #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
-    data_obs_chan = np.array(MB.getShape(chan,"data_obs")).astype(dtype)[1:-1]
-    nbinschan = data_obs_chan.shape[0]
-    #write to output array and increment counter
-    hdata_obs[ibin:ibin+nbinschan] = data_obs_chan
-    ibin += nbinschan
-    data_obs_chan = None
-    
-#fill norm
-for iproc,proc in enumerate(procs):
-  print(proc)
-  #counter to keep track of current bin being written
-  ibin = 0
-  for chan,nbinschan in zip(chans,nbinschans):
-    expchan = DC.exp[chan]
-    hasproc = proc in expchan
-    
-    if hasproc:
-      #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
-      norm_chan = np.array(MB.getShape(chan,proc)).astype(dtype)[1:-1]
-      if norm_chan.shape[0] != nbinschan:
-        raise Exception("Mismatch between number of bins in channel for data and template")
-      
-      if not options.allowNegativeExpectation:
-        norm_chan = np.maximum(norm_chan,0.)
-    else:
-      #no need to explicitly fill zeros, just increment counter
-      ibin += nbinschan
-      continue
-    
-    if options.sparse:
-      norm_chan_indices = np.transpose(np.nonzero(norm_chan))
-      norm_chan_values = np.reshape(norm_chan[norm_chan_indices],[-1])
-      
-      print("iproc = %d, chan = %s, sparse length = %d" % (iproc,chan,len(norm_chan_values)))
-      
-      nvals_chan = len(norm_chan_values)
-      oldlength = hlognorm_sparse_indices.shape[0]
-      newlength = oldlength + nvals_chan
-      
-      out_indices = np.array([[iproc,ibin]]) + np.pad(norm_chan_indices,((0,0),(1,0)),'constant')
-      norm_chan_indices = None
-      
-      hlognorm_sparse_indices.resize(newlength,axis=0)
-      hlognorm_sparse_indices[oldlength:newlength] = out_indices
-      out_indices = None
-      
-      hlognorm_sparse_values.resize(newlength,axis=0)
-      hlognorm_sparse_values[oldlength:newlength] = np.log(norm_chan_values)
-      norm_chan_values = None
-
-    #write to (dense) output array
-    hnorm[iproc,ibin:ibin+nbinschan] = norm_chan
-      
-    #increment counter
-    ibin += nbinschan
-    norm_chan = None
-      
-#fill logkavg and logkhalfdiff
-
-#numerical cutoff in case of zeros in systematic variations
-logkepsilon = math.log(1e-3)
-
-for isyst,syst in enumerate(DC.systs[:nsyst]):
-  name = syst[0]
-  stype = syst[2]
-  
-  print(name)
-  
-  for iproc,proc in enumerate(procs):
-    #counter to keep track of current bin being written
-    ibin = 0
-    for chan,nbinschan in zip(chans,nbinschans):
-      expchan = DC.exp[chan]
-      hasproc = proc in expchan
-      
-      if not hasproc:
-        #no need to explicitly fill zeros, just increment counter
-        ibin += nbinschan
-        continue
-      
-      #retrieve nominal template to calculate ratios and protections
-      norm_chan = hnorm[iproc,ibin:ibin+nbinschan]
-      
-      if stype=='lnN':
-        ksyst = syst[4][chan][proc]
-        if type(ksyst) is list:
-          ksystup = ksyst[1]
-          ksystdown = ksyst[0]
-          if ksystup == 0. and ksystdown==0.:
-            #no need to explicitly fill zeros, just increment counter
-            ibin += nbinschan
-            continue
-          if ksystup == 0.:
-            ksystup = 1.
-          if ksystdown == 0.:
-            ksystdown = 1.
-          logkup_chan = math.log(ksystup)*np.ones([nbinschan],dtype=dtype)
-          logkdown_chan = -math.log(ksystdown)*np.ones([nbinschan],dtype=dtype)
-        else:
-          if ksyst == 0.:
-            #no need to explicitly fill zeros, just increment counter
-            ibin += nbinschan
-            continue
-          logkup_chan = math.log(ksyst)*np.ones([nbinschan],dtype=dtype)
-          logkdown_chan = logkup_chan
-      elif 'shape' in stype:
-        kfac = syst[4][chan][proc]
-        
-        if kfac>0:
-          systup_chan = np.array(MB.getShape(chan,proc,name+"Up")).astype(dtype)[1:-1]
-          if systup_chan.shape[0] != nbinschan:
-            raise Exception("Mismatch between number of bins in channel for data and systematic variation template")
-          logkup_chan = kfac*np.log(systup_chan/norm_chan)
-          logkup_chan = np.where(np.equal(np.sign(norm_chan*systup_chan),1), logkup_chan, logkepsilon*np.ones_like(logkup_chan))
-          systup_chan = None
-          
-          systdown_chan = np.array(MB.getShape(chan,proc,name+"Down")).astype(dtype)[1:-1]
-          if systdown_chan.shape[0] != nbinschan:
-            raise Exception("Mismatch between number of bins in channel for data and systematic variation template")
-          logkdown_chan = -kfac*np.log(systdown_chan/norm_chan)
-          logkdown_chan = np.where(np.equal(np.sign(norm_chan*systdown_chan),1), logkdown_chan, -logkepsilon*np.ones_like(logkdown_chan))
-          systdown_chan = None
-          
-        else:
-          #no need to explicitly fill zeros, just increment counter
-          ibin += nbinschan
-          continue
-          
-      #compute avg and halfdiff
-      logkavg_chan = 0.5*(logkup_chan + logkdown_chan)
-      logkhalfdiff_chan = 0.5*(logkup_chan - logkdown_chan)
-      logkavg_chan = np.where(np.equal(norm_chan,0.), 0., logkavg_chan)
-      logkhalfdiff_chan = np.where(np.equal(norm_chan,0.), 0., logkhalfdiff_chan)
-      logkup_chan = None
-      logkdown_chan = None
-      
-      if options.sparse:
-        logkavg_chan_indices = np.transpose(np.nonzero(logkavg_chan))
-        logkavg_chan_values = np.reshape(logkavg_chan[logkavg_chan_indices],[-1])
-        
-        print("isyst, = %d, iproc = %d, chan = %s, sparse length avg = %d" % (isyst, iproc,chan,len(logkavg_chan_values)))
-        
-        nvals_chan = len(logkavg_chan_values)
-        oldlength = hlogkavg_sparse_indices.shape[0]
-        newlength = oldlength + nvals_chan
-        
-        out_indices = np.array([[isyst,iproc,ibin]]) + np.pad(logkavg_chan_indices,((0,0),(2,0)),'constant')
-        logkavg_chan_indices = None
-        
-        hlogkavg_sparse_indices.resize(newlength,axis=0)
-        hlogkavg_sparse_indices[oldlength:newlength] = out_indices
-        out_indices = None
-        
-        hlogkavg_sparse_values.resize(newlength,axis=0)
-        hlogkavg_sparse_values[oldlength:newlength] = logkavg_chan_values
-        logkavg_chan_values = None
-        
-        logkhalfdiff_chan_indices = np.transpose(np.nonzero(logkhalfdiff_chan))
-        logkhalfdiff_chan_values = np.reshape(logkhalfdiff_chan[logkhalfdiff_chan_indices],[-1])
-        
-        print("isyst, = %d, iproc = %d, chan = %s, sparse length diff = %d" % (isyst, iproc,chan,len(logkhalfdiff_chan_values)))
-        
-        nvals_chan = len(logkhalfdiff_chan_values)
-        oldlength = hlogkhalfdiff_sparse_indices.shape[0]
-        newlength = oldlength + nvals_chan
-        
-        out_indices = np.array([[isyst,iproc,ibin]]) + np.pad(logkhalfdiff_chan_indices,((0,0),(2,0)),'constant')
-        logkhalfdiff_chan_indices = None
-        
-        hlogkhalfdiff_sparse_indices.resize(newlength,axis=0)
-        hlogkhalfdiff_sparse_indices[oldlength:newlength] = out_indices
-        out_indices = None
-        
-        hlogkhalfdiff_sparse_values.resize(newlength,axis=0)
-        hlogkhalfdiff_sparse_values[oldlength:newlength] = logkhalfdiff_chan_values
-        logkhalfdiff_chan_values = None        
-      else:
-      #write to output arrays
-        hlogkavg[isyst,iproc,ibin:ibin+nbinschan] = logkavg_chan
-        hlogkhalfdiff[isyst,iproc,ibin:ibin+nbinschan] = logkhalfdiff_chan
-      
-      #increment counter
-      ibin += nbinschan
-      logkavg_chan = None
-      logkhalfdiff_chan = None
-      
-if options.sparse:
-  del f["hnorm"]

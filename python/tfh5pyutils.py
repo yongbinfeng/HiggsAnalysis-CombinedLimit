@@ -2,20 +2,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
-from HiggsAnalysis.CombinedLimit.h5pyutils import validateChunkSize
-
-def getGrid(h5dset):
-  #calculate grid of values to iterate over chunks
-  slices = []
-  for s,c in zip(h5dset.shape,h5dset.chunks):
-    slices.append(slice(0,s,c))
-
-  grid = np.mgrid[slices]
-  gridr = []
-  for r in grid:
-    gridr.append(r.ravel())
-  grid = np.transpose(np.c_[gridr])
-  return grid
+from HiggsAnalysis.CombinedLimit.h5pyutils import validateChunkSize, getGrid
 
 def maketensor(h5dset):
   
@@ -56,12 +43,15 @@ def maketensor(h5dset):
   dset = dset.map(lambda x: tf.py_func(readChunk,[x],tf.as_dtype(h5dset.dtype)))
   
   #batching not needed in case the whole array is contained in one chunk
-  if not h5dset.chunks == h5dset.shape:
-    minibatchsize = h5dset.shape[-1]
-    #special handling for 1D arrays with small chunk size, which may be relevant especially for
-    #underlying representation of sparse tensors
-    if len(h5dset)==1 and h5dset.chunks[0] < h5dset.shape[0]:
-      minibatchsize = 1
+  if not h5dset.chunks == h5dset.shape:    
+    #calculate largest minibatchsize which evenly divides into dataset
+    #(check only multiples of the shape rather than a full prime factorization)"
+    minibatchsize = 1
+    for s,c in zip(reversed(h5dset.shape),reversed(h5dset.chunks)):
+      if c==s:
+        minibatchsize *= s
+      else:
+        break
       
     nbatch = int(h5dset.size/minibatchsize)
     dset = dset.flat_map(lambda x: tf.data.Dataset.from_tensor_slices(tf.reshape(x,[-1,minibatchsize])))

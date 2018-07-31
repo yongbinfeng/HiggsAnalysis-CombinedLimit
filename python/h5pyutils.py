@@ -21,6 +21,10 @@ def makeChunkSize(shape,dtype,maxbytes = 1024**2):
   return tuple(chunks)
   
 def validateChunkSize(h5dset):  
+  #empty datasets are by construction ok
+  if h5dset.size == 0:
+    return True
+  
   esize = np.dtype(h5dset.dtype).itemsize
 
   #start from right, once first chunksize is less than shape size, all chunksizes to the left must be exactly 1
@@ -35,7 +39,50 @@ def validateChunkSize(h5dset):
     if c<s:
       isPartial = True
   
-  if len(h5dset.shape)>1 and h5dset.chunks[-1]<h5dset.shape[-1]:
-    raise Exception("Can't safely subdivide the last dimension, must increase cache size to get around this.")
-  
   return True
+
+def getGrid(h5dset):
+  #calculate grid of values to iterate over chunks
+  slices = []
+  for s,c in zip(h5dset.shape,h5dset.chunks):
+    slices.append(slice(0,s,c))
+
+  grid = np.mgrid[slices]
+  gridr = []
+  for r in grid:
+    gridr.append(r.ravel())
+  grid = np.transpose(np.c_[gridr])
+  return grid
+
+def writeInChunks(arr, h5group, outname, maxChunkBytes = 1024**2):
+  #special handling for empty datasets, which should not use chunked storage or compression
+  if arr.size == 0:
+    chunks = None
+    compression = None
+  else:
+    chunks = makeChunkSize(arr.shape,arr.dtype,maxChunkBytes)
+    compression = "gzip"
+  
+  h5dset = h5group.create_dataset(outname, arr.shape, chunks=chunks, dtype=arr.dtype, compression=compression)
+  validateChunkSize(h5dset)
+  
+  #nothing to do for empty dataset
+  if arr.size == 0:
+    return h5dset
+  
+  #write in chunks, preserving sparsity if relevant
+  grid = getGrid(h5dset)
+  for gv in grid:
+    readslices = []
+    for g,c in zip(gv,h5dset.chunks):
+      readslices.append(slice(g,g+c))
+    readslices = tuple(readslices)
+    #write data from exactly one complete chunk
+    aout = arr[readslices]
+    #no need to explicitly write chunk if it contains only zeros
+    if np.count_nonzero(arr):
+      h5dset[readslices] = aout
+      
+  return h5dset
+
+  
