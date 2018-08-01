@@ -16,7 +16,7 @@ import numpy as np
 import h5py
 import h5py_cache
 from HiggsAnalysis.CombinedLimit.tfh5pyutils import maketensor,makesparsetensor
-from HiggsAnalysis.CombinedLimit.tfsparseutils import sparse_reduce_sum_sparse_m, sparse_reduce_sum_0,sparse_reduce_sum_m, sparseexpmul
+from HiggsAnalysis.CombinedLimit.tfsparseutils import sparse_reduce_sum_sparse_m, sparse_reduce_sum_0,sparse_reduce_sum_m, sparseexpmul, simple_sparse_tensor_dense_matmul, SimpleSparseTensor
 import scipy
 import math
 import time
@@ -173,29 +173,45 @@ alpha =  0.125 * twox * (twox2 * (3*twox2 - 10.) + 15.)
 alpha = tf.clip_by_value(alpha,-1.,1.)
 
 thetaalpha = theta*alpha
-mthetaalpha = tf.stack([theta,thetaalpha],axis=-1) #now has shape [nsyst,2]
 
 if sparse:
-  mthetaalpha = tf.expand_dims(mthetaalpha,0) #now has shape [1,nsyst,2]
-  mthetaalpha = tf.expand_dims(mthetaalpha,0) #now has shape [1,1,nsyst,2]
+  mthetaalpha = tf.concat([theta,thetaalpha],axis=0) #now has shape [2*nsyst]
+  mthetaalpha = tf.expand_dims(mthetaalpha,-1) #now has shape [2*nsyst, 1]
   
-  logktheta_sparse = mthetaalpha*logk_sparse
-  logsnorm_sparse = sparse_reduce_sum_sparse_m(logktheta_sparse,ndims=2,doCache=True)
+  #logsnorm = tf.sparse_tensor_dense_matmul(logk_sparse,mthetaalpha)
+  logsnorm = simple_sparse_tensor_dense_matmul(logk_sparse,mthetaalpha)
+  logsnorm = tf.squeeze(logsnorm,-1)
+  snorm = tf.exp(logsnorm)
   
-  mrnorm = tf.expand_dims(rnorm,0) #now has shape [1,nproc]
-  pnormfull_sparse = mrnorm*sparseexpmul(logsnorm_sparse,norm_sparse,doCache=True)
   
-  nexpfull = sparse_reduce_sum_m(pnormfull_sparse,doCache=True)
+  #logktheta_sparse = mthetaalpha*logk_sparse
+  #logsnorm_sparse = sparse_reduce_sum_sparse_m(logktheta_sparse,ndims=2,doCache=True)
+  
+  #mrnorm = tf.expand_dims(rnorm,0) #now has shape [1,nproc]
+  #pnormfull_sparse = mrnorm*sparseexpmul(logsnorm_sparse,norm_sparse,doCache=True)
+  #nexpfull = sparse_reduce_sum_m(pnormfull_sparse,doCache=True)
+  
+  #pnormfull_sparse = sparseexpmul(logsnorm_sparse,norm_sparse,doCache=True)
+  #pnormfull_sparse = tf.SparseTensor(norm_sparse.indices, snorm*norm_sparse.values, norm_sparse.dense_shape)
+  pnormfull_sparse = SimpleSparseTensor(norm_sparse.indices, snorm*norm_sparse.values, norm_sparse.dense_shape)
+  mrnorm = tf.expand_dims(rnorm,-1)
+  #nexpfull = tf.sparse_tensor_dense_matmul(pnormfull_sparse,mrnorm)
+  nexpfull = simple_sparse_tensor_dense_matmul(pnormfull_sparse,mrnorm)
+  nexpfull = tf.squeeze(nexpfull,-1)
 
-  pnormmasked_sparse = tf.sparse_slice(pnormfull_sparse,[nsignals,nbinsmasked],[0,nbins])
-  pmaskedexp = sparse_reduce_sum_0(pnormmasked_sparse,reduced_shape=[nsignals],doCache=True)
+  #pnormmasked_sparse = tf.sparse_slice(pnormfull_sparse,[nsignals,nbinsmasked],[0,nbins])
+  #pmaskedexp = sparse_reduce_sum_0(pnormmasked_sparse,reduced_shape=[nsignals],doCache=True)
+  #pmaskedexp = r*pmaskedexp
+  pmaskedexp = tf.zeros([nsignals],dtype=dtype)
   
   maskedexp = nexpfull[nbins:]
+  pmaskedexpnorm = pmaskedexp
 
-  if nbinsmasked>0:
-    pmaskedexpnorm = sparse_reduce_sum_0(pnormmasked_sparse/maskedexp,reduced_shape=[nsignals],doCache=True)
-  else:
-    pmaskedexpnorm = pmaskedexp
+  #if nbinsmasked>0:
+    #pmaskedexpnorm = sparse_reduce_sum_0(pnormmasked_sparse/maskedexp,reduced_shape=[nsignals],doCache=True)
+    #pmaskedexpnorm = r*pmaskedexpnorm
+  #else:
+    #pmaskedexpnorm = pmaskedexp
   
 else:
   #matrix encoding effect of nuisance parameters
@@ -210,8 +226,9 @@ else:
   
   #logsnorm = tf.einsum('kl,ijkl->ij', mthetaalpha, logk)
   
-  mthetaalpha = tf.reshape(mthetaalpha,[-1,1])
-  mlogk = tf.reshape(logk,[-1,2*nsyst])
+  mthetaalpha = tf.stack([theta,thetaalpha],axis=0) #now has shape [2,nsyst]
+  mthetaalpha = tf.reshape(mthetaalpha,[2*nsyst,1])
+  mlogk = tf.reshape(logk,[nbinsfull*nproc,2*nsyst])
   logsnorm = tf.matmul(mlogk,mthetaalpha)
   logsnorm = tf.reshape(logsnorm,[nbinsfull,nproc])
 
@@ -497,6 +514,9 @@ print("set likelihood offset (and trigger initialization of input from disk and 
 #set likelihood offset
 sess.run(nexpnomassign)
 
+#exit()
+
+
 outvalsgens,thetavalsgen = sess.run([outputs,theta])
 
 #prefit to data if needed
@@ -579,7 +599,7 @@ for itoy in range(ntoys):
       lval = sess.run([l])
     t = time.time() - t0
     print("%d l evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
-    
+        
     neval = 10
     t0 = time.time()
     for i in range(neval):
@@ -587,13 +607,13 @@ for itoy in range(ntoys):
       lval,gval = sess.run([l,grad])
     t = time.time() - t0
     print("%d l+grad evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
-    
-    neval = 1
+        
+    neval = 0
     t0 = time.time()
     for i in range(neval):
       hessval = sess.run([hessian])
     t = time.time() - t0
-    print("%d hessian evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
+    print("%d hessian evals in %f seconds, %f seconds per eval" % (neval,t,t/max(1,neval)))
   
   if dofit:
     ret = minimizer.minimize(sess)

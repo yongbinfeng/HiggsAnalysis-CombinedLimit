@@ -55,6 +55,8 @@ def getGrid(h5dset):
   return grid
 
 def writeInChunks(arr, h5group, outname, maxChunkBytes = 1024**2):
+  nbytes = arr.size*np.dtype(arr.dtype).itemsize
+  
   #special handling for empty datasets, which should not use chunked storage or compression
   if arr.size == 0:
     chunks = None
@@ -68,7 +70,7 @@ def writeInChunks(arr, h5group, outname, maxChunkBytes = 1024**2):
   
   #nothing to do for empty dataset
   if arr.size == 0:
-    return h5dset
+    return nbytes
   
   #write in chunks, preserving sparsity if relevant
   grid = getGrid(h5dset)
@@ -83,6 +85,6 @@ def writeInChunks(arr, h5group, outname, maxChunkBytes = 1024**2):
     if np.count_nonzero(aout):
       h5dset[readslices] = aout
       
-  return h5dset
+  return nbytes
 
   

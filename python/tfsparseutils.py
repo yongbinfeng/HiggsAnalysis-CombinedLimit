@@ -1,9 +1,45 @@
 import tensorflow as tf
 
+from tensorflow.python.ops import gen_sparse_ops
+from tensorflow.python.framework import ops
+
+
+class SimpleSparseTensor:
+  def __init__(self, indices, values, dense_shape):
+    self.indices = indices
+    self.values = values
+    self.dense_shape = dense_shape
+
+def simple_sparse_tensor_dense_matmul(sp_a,
+                               b,
+                               adjoint_a=False,
+                               adjoint_b=False,
+                               name=None):
+  
+  #sp_a = _convert_to_sparse_tensor(sp_a)
+  with ops.name_scope(name, "SparseTensorDenseMatMul",
+                      [sp_a.indices, sp_a.values, b]) as name:
+    b = ops.convert_to_tensor(b, name="b")
+    #to be compatible with different tensorflow versions where the name of the op changed
+    try:
+      dense_mat_mul = gen_sparse_ops.sparse_tensor_dense_mat_mul
+    except:
+      dense_mat_mul = gen_sparse_ops._sparse_tensor_dense_mat_mul
+      
+    return dense_mat_mul(
+        a_indices=sp_a.indices,
+        a_values=sp_a.values,
+        a_shape=sp_a.dense_shape,
+        b=b,
+        adjoint_a=adjoint_a,
+        adjoint_b=adjoint_b)
 
 def flatten_indices(indices,shape):
   if indices.dtype != tf.int32:
     indices = tf.cast(indices,tf.int32)
+  if len(shape) == 1:
+    indicesflat = tf.squeeze(indices,-1)
+    return (indicesflat, int(shape[0]))
   flat_shape = 1
   for s in shape:
     flat_shape *= int(s)
@@ -26,7 +62,8 @@ def sparse_reduce_sum_sparse_0(in_sparse, ndims=1, doCache=False):
   
   reduced_indices_flat, segment_ids = tf.unique(indicesflat)
   reduced_size = tf.shape(reduced_indices_flat)[0]
-  reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
+  if reduced_indices_flat.dtype != tf.int64:
+    reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
   reduced_indices = tf.transpose(tf.unravel_index(reduced_indices_flat,reduced_shape))
   reduced_indices = tf.Print(reduced_indices,[],message="computing indices")
   
@@ -44,7 +81,8 @@ def sparse_reduce_sum_sparse_m(in_sparse, ndims=1, doCache=False):
   indicesflat,_ = flatten_indices(indicespartial, reduced_shape)
   
   reduced_indices_flat, segment_ids = tf.unique(indicesflat)
-  reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
+  if reduced_indices_flat.dtype != tf.int64:
+    reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
   reduced_indices = tf.transpose(tf.unravel_index(reduced_indices_flat,reduced_shape))
   reduced_indices = tf.Print(reduced_indices,[],message="computing indices")
   
@@ -75,7 +113,8 @@ def sparse_reduce_sum_0(in_sparse, ndims=1, reduced_shape=None, doCache=False):
 
 def sparse_reduce_sum_m(in_sparse, ndims = 1, reduced_shape=None, doCache=False):
   if reduced_shape is None:
-    reduced_shape = in_sparse.get_shape()[:-ndims]  
+    reduced_shape = in_sparse.get_shape()[:-ndims]
+  
   indicespartial = in_sparse.indices[:,:-ndims]
   indicesflat,flat_size = flatten_indices(indicespartial, reduced_shape)
   
@@ -126,7 +165,8 @@ def sparse_add_alt(a,b):
   
   reduced_indices_flat, segment_ids = tf.unique(indicesflat)
   reduced_size = tf.shape(reduced_indices_flat)[0]
-  reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
+  if reduced_indices_flat.dtype != tf.int64:
+    reduced_indices_flat = tf.cast(reduced_indices_flat, tf.int64)
   reduced_indices = tf.transpose(tf.unravel_index(reduced_indices_flat,reduced_shape))
   
   if doCache:

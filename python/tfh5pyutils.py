@@ -3,6 +3,7 @@ import tensorflow as tf
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
 from HiggsAnalysis.CombinedLimit.h5pyutils import validateChunkSize, getGrid
+from HiggsAnalysis.CombinedLimit.tfsparseutils import SimpleSparseTensor
 
 def maketensor(h5dset):
   
@@ -10,6 +11,9 @@ def maketensor(h5dset):
   nelems = 1
   for s in h5dset.shape:
     nelems *= s
+  
+  esize = np.dtype(h5dset.dtype).itemsize
+  print([nelems*esize, h5dset.shape, h5dset.dtype])
   
   if nelems == 0:
     return tf.zeros(h5dset.shape,h5dset.dtype)
@@ -68,4 +72,5 @@ def makesparsetensor(h5group):
   values = maketensor(h5group['values'])
   dense_shape = h5group['dense_shape'][...]
 
-  return tf.SparseTensor(indices,values,dense_shape)
+  return SimpleSparseTensor(indices,values,dense_shape)
+  #return tf.SparseTensor(indices,values,dense_shape)
