@@ -459,14 +459,9 @@ if options.nThreads>0:
 else:
   config = None
 
-#initializers = []
-#initializers.append(globalinit)
-#initializers.extend(tf.get_collection("cache_initializers"))
-
 sess = tf.Session(config=config)
 
 #note that initializing all variables also triggers reading the hdf5 arrays from disk and populating the caches
-#sess.run(initializers)
 print("initializing variables (this will trigger loading of large arrays from disk)")
 sess.run(globalinit)
 
