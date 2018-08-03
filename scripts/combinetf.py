@@ -16,7 +16,7 @@ import numpy as np
 import h5py
 import h5py_cache
 from HiggsAnalysis.CombinedLimit.tfh5pyutils import maketensor,makesparsetensor
-from HiggsAnalysis.CombinedLimit.tfsparseutils import sparse_reduce_sum_sparse_m, sparse_reduce_sum_0,sparse_reduce_sum_m, sparseexpmul, simple_sparse_tensor_dense_matmul, SimpleSparseTensor
+from HiggsAnalysis.CombinedLimit.tfsparseutils import simple_sparse_tensor_dense_matmul, sparse_reduce_sum_0, simple_sparse_slice, simple_sparse_to_dense, SimpleSparseTensor
 import scipy
 import math
 import time
@@ -83,17 +83,18 @@ sparse = not 'hnorm' in f
 if sparse:
   hnorm_sparse = f['hnorm_sparse']
   hlogk_sparse = f['hlogk_sparse']
+  nbinsfull = hnorm_sparse.attrs['dense_shape'][0]
 else:  
   hnorm = f['hnorm']
   hlogk = f['hlogk']
+  nbinsfull = hnorm.attrs['original_shape'][0]
 
 #infer some metadata from loaded information
 dtype = hdata_obs.dtype
 nbins = hdata_obs.shape[-1]
-nbinsmasked = len(maskedchans)
-nbinsfull = nbins + nbinsmasked
-nsyst = len(systs)
+nbinsmasked = nbinsfull - nbins
 nproc = len(procs)
+nsyst = len(systs)
 nsignals = len(signals)
 
 #build tensorflow graph for likelihood calculation
@@ -108,6 +109,11 @@ if sparse:
 else:
   norm = maketensor(hnorm)
   logk = maketensor(hlogk)
+
+#sess = tf.Session()
+
+#sess.run(tf.reduce_sum(logk))
+#exit()
 
 if options.nonNegativePOI:
   boundmode = 1
@@ -178,40 +184,17 @@ if sparse:
   mthetaalpha = tf.concat([theta,thetaalpha],axis=0) #now has shape [2*nsyst]
   mthetaalpha = tf.expand_dims(mthetaalpha,-1) #now has shape [2*nsyst, 1]
   
-  #logsnorm = tf.sparse_tensor_dense_matmul(logk_sparse,mthetaalpha)
   logsnorm = simple_sparse_tensor_dense_matmul(logk_sparse,mthetaalpha)
   logsnorm = tf.squeeze(logsnorm,-1)
   snorm = tf.exp(logsnorm)
   
-  
-  #logktheta_sparse = mthetaalpha*logk_sparse
-  #logsnorm_sparse = sparse_reduce_sum_sparse_m(logktheta_sparse,ndims=2,doCache=True)
-  
-  #mrnorm = tf.expand_dims(rnorm,0) #now has shape [1,nproc]
-  #pnormfull_sparse = mrnorm*sparseexpmul(logsnorm_sparse,norm_sparse,doCache=True)
-  #nexpfull = sparse_reduce_sum_m(pnormfull_sparse,doCache=True)
-  
-  #pnormfull_sparse = sparseexpmul(logsnorm_sparse,norm_sparse,doCache=True)
-  #pnormfull_sparse = tf.SparseTensor(norm_sparse.indices, snorm*norm_sparse.values, norm_sparse.dense_shape)
-  pnormfull_sparse = SimpleSparseTensor(norm_sparse.indices, snorm*norm_sparse.values, norm_sparse.dense_shape)
+  snormnorm_sparse = SimpleSparseTensor(norm_sparse.indices, snorm*norm_sparse.values, norm_sparse.dense_shape)
   mrnorm = tf.expand_dims(rnorm,-1)
-  #nexpfull = tf.sparse_tensor_dense_matmul(pnormfull_sparse,mrnorm)
-  nexpfull = simple_sparse_tensor_dense_matmul(pnormfull_sparse,mrnorm)
+  nexpfull = simple_sparse_tensor_dense_matmul(snormnorm_sparse,mrnorm)
   nexpfull = tf.squeeze(nexpfull,-1)
 
-  #pnormmasked_sparse = tf.sparse_slice(pnormfull_sparse,[nsignals,nbinsmasked],[0,nbins])
-  #pmaskedexp = sparse_reduce_sum_0(pnormmasked_sparse,reduced_shape=[nsignals],doCache=True)
-  #pmaskedexp = r*pmaskedexp
-  pmaskedexp = tf.zeros([nsignals],dtype=dtype)
-  
-  maskedexp = nexpfull[nbins:]
-  pmaskedexpnorm = pmaskedexp
-
-  #if nbinsmasked>0:
-    #pmaskedexpnorm = sparse_reduce_sum_0(pnormmasked_sparse/maskedexp,reduced_shape=[nsignals],doCache=True)
-    #pmaskedexpnorm = r*pmaskedexpnorm
-  #else:
-    #pmaskedexpnorm = pmaskedexp
+  snormnormmasked_sparse = simple_sparse_slice(snormnorm_sparse,[nbins,0],[nbinsfull,nsignals])
+  snormnormmasked = simple_sparse_to_dense(snormnormmasked_sparse)
   
 else:
   #matrix encoding effect of nuisance parameters
@@ -222,9 +205,6 @@ else:
   #logk = logkavg + alpha*logkhalfdiff
   #logktheta = theta*logk
   #logsnorm = tf.reduce_sum(logktheta, axis=0)
-  #logsnorm = tf.einsum('i,ijk->jk',theta,logkavg) + tf.einsum('i,ijk->jk',alphatheta,logkhalfdiff)
-  
-  #logsnorm = tf.einsum('kl,ijkl->ij', mthetaalpha, logk)
   
   mthetaalpha = tf.stack([theta,thetaalpha],axis=0) #now has shape [2,nsyst]
   mthetaalpha = tf.reshape(mthetaalpha,[2*nsyst,1])
@@ -241,36 +221,32 @@ else:
   #rnorm = tf.reshape(rnorm,[1,-1])
   #pnormfull = rnorm*snorm*norm
   #nexpfull = tf.reduce_sum(pnormfull,axis=-1)
-  #nexpfull = tf.einsum('j,ij,ij->i',rnorm,snorm,norm)
+  snormnorm = snorm*norm
   mrnorm = tf.reshape(rnorm,[-1,1])
   mrnorm = tf.expand_dims(rnorm,-1)
-  nexpfull = tf.matmul(snorm*norm, mrnorm)
+  nexpfull = tf.matmul(snormnorm, mrnorm)
   nexpfull = tf.squeeze(nexpfull,-1)
 
-  #pnormmasked = pnormfull[:nsignals,nbins:]
-  #pmaskedexp = tf.reduce_sum(pnormmasked, axis=-1)
-  snormmasked = snorm[nbins:,:nsignals]
-  normmasked = norm[nbins:,:nsignals]
-  #pmaskedexp = tf.einsum('i,ij,ij->i',r,snormmasked,normmasked)
-  pmaskedexppartial = tf.einsum('ij,ij->j',snormmasked,normmasked)
-  pmaskedexp = r*pmaskedexppartial
+  snormnormmasked = snormnorm[nbins:,:nsignals]
+  
+pmaskedexp = r*tf.reduce_sum(snormnormmasked,axis=0)
 
-  #maskedexp = tf.reduce_sum(pnormmasked, axis=0,keepdims=True)
-  maskedexp = nexpfull[nbins:]
+maskedexp = nexpfull[nbins:]
 
-  #if nbinsmasked>0:
-    #pmaskedexpnorm = tf.reduce_sum(pnormmasked/maskedexp, axis=-1)
-  #else:
-    #pmaskedexpnorm = pmaskedexp
-  pmaskedexpnormpartial = tf.einsum('ij,ij,i->j',snormmasked,normmasked,tf.reciprocal(maskedexp))
-  pmaskedexpnorm = r*pmaskedexpnormpartial
+#matrix multiplication below is equivalent to
+#pmaskedexpnorm = r*tf.reduce_sum(snormnormmasked/maskedexp, axis=0)
+
+mmaskedexpr = tf.expand_dims(tf.reciprocal(maskedexp),0)
+pmaskedexpnorm = tf.matmul(mmaskedexpr,snormnormmasked)
+pmaskedexpnorm = tf.squeeze(pmaskedexpnorm,0)
+pmaskedexpnorm = r*pmaskedexpnorm
  
 nexp = nexpfull[:nbins]
 
 nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
 lognexp = tf.log(nexpsafe)
 
-nexpnom = tf.Variable(tf.zeros([nbins],dtype=dtype), trainable=False, name="nexpnom")
+nexpnom = tf.Variable(nexp, trainable=False, name="nexpnom")
 nexpnomsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexpnom)
 lognexpnom = tf.log(nexpnomsafe)
 
@@ -300,23 +276,8 @@ if nbinsmasked>0:
   outputs.append(pmaskedexp)
   outputs.append(pmaskedexpnorm)
 
-print("final grad")
 grad = tf.gradients(l,x,gate_gradients=True)[0]
-print("done")
-#print('hsum')
-#hsum = tf.gradients(grad,x, gate_gradients=True)
-#print('done')
-#print("grad1")
-#hess1 = grad[1]
-#gradcol = tf.reshape(grad,[-1,1])
-#hess1 = tf.gradients(grad[1],x,gate_gradients=True)
-#grad1 = tf.tensordot(grad,tf.one_hot(1,nparms,dtype=dtype),1)
-#print("hess1")
-#hess1 = tf.gradients(grad1,x,gate_gradients=True)
-#print('done')
-#print("hessian")
 hessian = jacobian(grad,x,gate_gradients=True,parallel_iterations=1,back_prop=False)
-#print("done")
 
 eigvals = tf.self_adjoint_eigvals(hessian)
 mineigv = tf.reduce_min(eigvals)
@@ -370,7 +331,7 @@ globalinit = tf.global_variables_initializer()
 nexpnomassign = tf.assign(nexpnom,nexp)
 dataobsassign = tf.assign(nobs,data_obs)
 asimovassign = tf.assign(nobs,nexp)
-#asimovrandomizestart = tf.assign(x,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(x,invhess).sample(),lb,ub))
+asimovrandomizestart = tf.assign(x,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(x,invhessian).sample(),lb,ub))
 bootstrapassign = tf.assign(nobs,tf.random_poisson(nobs,shape=[],dtype=dtype))
 toyassign = tf.assign(nobs,tf.random_poisson(nexp,shape=[],dtype=dtype))
 frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=theta.shape,dtype=dtype))
@@ -501,21 +462,17 @@ else:
 #initializers.extend(tf.get_collection("cache_initializers"))
 
 sess = tf.Session(config=config)
+
 #note that initializing all variables also triggers reading the hdf5 arrays from disk and populating the caches
 #sess.run(initializers)
-print("initializing variables")
+print("initializing variables (this will trigger loading of large arrays from disk)")
 sess.run(globalinit)
-print("initializing operations caches")
-for cacheinit in tf.get_collection("cache_initializers"):
-  sess.run(cacheinit)
+
 xv = sess.run(x)
 
 print("set likelihood offset (and trigger initialization of input from disk and caches)")
 #set likelihood offset
 sess.run(nexpnomassign)
-
-#exit()
-
 
 outvalsgens,thetavalsgen = sess.run([outputs,theta])
 
@@ -538,8 +495,7 @@ for itoy in range(ntoys):
     print("Running fit to asimov toy")
     sess.run(asimovassign)
     if options.randomizeStart:
-      raise Exception("Randomization of starting values is not currently implemented.")
-      #sess.run(asimovrandomizestart)
+      sess.run(asimovrandomizestart)
     else:
       dofit = False
   elif options.toys == 0:
@@ -569,28 +525,6 @@ for itoy in range(ntoys):
   #set likelihood offset
   sess.run(nexpnomassign)
   
-  #if sparse:
-    #print(sess.run(tf.sparse_reduce_sum(logsnorm_sparse)))
-    #print(sess.run(tf.reduce_min(logsnorm_sparse.values)))
-    #print(sess.run(tf.sparse_reduce_max(logsnorm_sparse)))
-  #else:
-    #print(sess.run(tf.reduce_sum(logsnorm)))
-    #print(sess.run(tf.reduce_min(logsnorm)))
-    #print(sess.run(tf.reduce_max(logsnorm)))
-    
-  #print(sess.run(tf.reduce_sum(nexp)))
-  #print(sess.run(nexp))
-  #print(sess.run(lfull))
-  #print(sess.run(tf.gradients(l,x, gate_gradients=True)))
-  #print(sess.run(tf.gradients(tf.gradients(l,x, gate_gradients=True)[0][0],x,gate_gradients=True)))
-  #print(sess.run(tf.gradients(tf.gradients(l,x, gate_gradients=True)[0][1],x,gate_gradients=True)))
-  #print(sess.run(grad1))
-  #print(sess.run(hess1))
-  #print(sess.run(hsum))
-
-  ##print(sess.run(hessian[0]))
-  #print(sess.run(hessian))
-  
   if options.doBenchmark:
     neval = 10
     t0 = time.time()
@@ -608,12 +542,14 @@ for itoy in range(ntoys):
     t = time.time() - t0
     print("%d l+grad evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
         
-    neval = 0
+    neval = 1
     t0 = time.time()
     for i in range(neval):
       hessval = sess.run([hessian])
     t = time.time() - t0
     print("%d hessian evals in %f seconds, %f seconds per eval" % (neval,t,t/max(1,neval)))
+    
+    exit()
   
   if dofit:
     ret = minimizer.minimize(sess)

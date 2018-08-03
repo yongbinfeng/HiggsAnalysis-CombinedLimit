@@ -2,75 +2,56 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
-from HiggsAnalysis.CombinedLimit.h5pyutils import validateChunkSize, getGrid
 from HiggsAnalysis.CombinedLimit.tfsparseutils import SimpleSparseTensor
 
 def maketensor(h5dset):
   
-  #special handling for empty arrays
-  nelems = 1
-  for s in h5dset.shape:
-    nelems *= s
+  ndims = len(h5dset.shape)
+  if ndims>1:
+    raise Exception("Only flat tensors are supported")
   
-  esize = np.dtype(h5dset.dtype).itemsize
-  print([nelems*esize, h5dset.shape, h5dset.dtype])
+  if 'original_shape' in h5dset.attrs:
+    shape = h5dset.attrs['original_shape']
+  else:
+    shape = h5dset.shape
+    
+  if h5dset.size == 0:
+    return tf.zeros(shape,h5dset.dtype)
   
-  if nelems == 0:
-    return tf.zeros(h5dset.shape,h5dset.dtype)
+  chunksize = h5dset.chunks[0]
+  chunkiter = range(0,h5dset.size,chunksize)
   
-  #check that chunk shape is compatible with optimized reading strategy
-  validateChunkSize(h5dset)
-  
-  grid = getGrid(h5dset)
-
   def readChunk(i):
-    gv = grid[i]
-    readslices = []
-    for g,c in zip(gv,h5dset.chunks):
-      readslices.append(slice(g,g+c))
-    readslices = tuple(readslices)
-    #read data from exactly one complete chunk
-    aout = h5dset[readslices]
-    return aout
+    ielem = chunkiter[i]
+    aout = h5dset[ielem:ielem+chunksize]
+    if not aout.shape == h5dset.chunks:
+      aout.resize(h5dset.chunks)
+    return aout  
       
   #calculate number of chunks
-  nchunks = len(grid)  
+  nchunks = len(chunkiter)  
   
-  #create tf Dataset which reads one chunk at a time, unbatches them along the last dimension and  batches them all together,
-  #reshapes to restore the original shape, then caches the full result and returns it in an endless loop
-  #(unbatching and rebatching is needed because batching only works with equally sized elements, which cannot be guaranteed in case
-  #the dataset is not an exact multiple of the chunk size)
-  #There are assumptions here about the chunk shape which are enforced by validateChunkSize
+  #create tf Dataset which reads one chunk at a time.  The last chunk may need to be padded to match the chunk size.
+  #Chunks are then batched together if necessary, and then the padded part is sliced out if necessary
+  #n.b. map_and_batch is used instead of the simple dataset batch function because in tf 1.6 this apparently avoids an
+  #extra copy in memory
   
   dset = tf.data.Dataset.range(nchunks)
-  
-  dset = dset.map(lambda x: tf.py_func(readChunk,[x],tf.as_dtype(h5dset.dtype)))
-  
-  #batching not needed in case the whole array is contained in one chunk
-  if not h5dset.chunks == h5dset.shape:    
-    #calculate largest minibatchsize which evenly divides into dataset
-    #(check only multiples of the shape rather than a full prime factorization)"
-    minibatchsize = 1
-    for s,c in zip(reversed(h5dset.shape),reversed(h5dset.chunks)):
-      if c==s:
-        minibatchsize *= s
-      else:
-        break
-      
-    nbatch = int(h5dset.size/minibatchsize)
-    dset = dset.flat_map(lambda x: tf.data.Dataset.from_tensor_slices(tf.reshape(x,[-1,minibatchsize])))
-    dset = dset.apply(tf.contrib.data.map_and_batch(lambda x: x, nbatch))
-    dset = dset.map(lambda x: tf.reshape(x,h5dset.shape))
-    
+  dset = dset.map(lambda x: tf.reshape(tf.py_func(readChunk,[x],tf.as_dtype(h5dset.dtype)),h5dset.chunks))
+  if nchunks>1:
+    dset = dset.apply(tf.contrib.data.map_and_batch(lambda x: x, nchunks))
+    if not h5dset.shape[0]%h5dset.chunks[0] == 0:
+      paddedshape = (nchunks*chunksize,)
+      dset = dset.map(lambda x: tf.reshape(x,paddedshape)[:h5dset.shape[0]])
+
+  dset = dset.map(lambda x: tf.reshape(x,shape))    
   dset = dset.cache().repeat(-1)
   atensor = dset.make_one_shot_iterator().get_next()
-  atensor.set_shape(h5dset.shape)
   return atensor
 
 def makesparsetensor(h5group):
   indices = maketensor(h5group['indices'])
   values = maketensor(h5group['values'])
-  dense_shape = h5group['dense_shape'][...]
+  dense_shape = h5group.attrs['dense_shape']
 
   return SimpleSparseTensor(indices,values,dense_shape)
-  #return tf.SparseTensor(indices,values,dense_shape)

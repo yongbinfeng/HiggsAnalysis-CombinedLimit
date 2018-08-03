@@ -6,7 +6,7 @@ from optparse import OptionParser
 import numpy as np
 import h5py
 import h5py_cache
-from HiggsAnalysis.CombinedLimit.h5pyutils import makeChunkSize,validateChunkSize,writeInChunks
+from HiggsAnalysis.CombinedLimit.h5pyutils import writeFlatInChunks, writeSparse
 import math
 import gc
 
@@ -104,6 +104,9 @@ for chan in DC.bins:
   if chan in options.maskedChan:
     chans.append(chan)
     maskedchans.append(chan)
+    
+if not len(maskedchans) == len(options.maskedChan):
+  raise Exception("Some of the specified masked channels do not actually exist")
 
 #first loop through observed data to determine the total number of bins
 nbinsfull = 0
@@ -172,8 +175,6 @@ logkepsilon = math.log(1e-3)
 #counter to keep track of current bin being written
 ibin = 0
 for chan in chans:
-  print(chan)
-
   if not chan in options.maskedChan:
     #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
     data_obs_chan_hist = MB.getShape(chan,"data_obs")
@@ -206,9 +207,7 @@ for chan in chans:
     if options.sparse:
       norm_chan_indices = np.transpose(np.nonzero(norm_chan))
       norm_chan_values = np.reshape(norm_chan[norm_chan_indices],[-1])
-      
-      print("iproc = %d, chan = %s, sparse length = %d" % (iproc,chan,len(norm_chan_values)))
-      
+            
       nvals_chan = len(norm_chan_values)
       oldlength = norm_sparse_size
       norm_sparse_size = oldlength + nvals_chan
@@ -234,9 +233,7 @@ for chan in chans:
     for isyst,syst in enumerate(DC.systs[:nsyst]):
       name = syst[0]
       stype = syst[2]
-  
-      print(name)
-      
+        
       if stype=='lnN':
         ksyst = syst[4][chan][proc]
         if type(ksyst) is list:
@@ -295,7 +292,6 @@ for chan in chans:
       if options.sparse:
         logkavg_chan_indices = np.transpose(np.nonzero(logkavg_chan))
         logkavg_chan_values = np.reshape(logkavg_chan[logkavg_chan_indices],[-1])
-        print("isyst, = %d, iproc = %d, chan = %s, sparse length avg = %d" % (isyst, iproc,chan,len(logkavg_chan_values)))
         
         nvals_chan = len(logkavg_chan_values)
         oldlength = logk_sparse_size
@@ -319,9 +315,7 @@ for chan in chans:
         
         logkhalfdiff_chan_indices = np.transpose(np.nonzero(logkhalfdiff_chan))
         logkhalfdiff_chan_values = np.reshape(logkhalfdiff_chan[logkhalfdiff_chan_indices],[-1])
-        
-        print("isyst, = %d, iproc = %d, chan = %s, sparse length diff = %d" % (isyst, iproc,chan,len(logkhalfdiff_chan_values)))
-        
+                
         nvals_chan = len(logkhalfdiff_chan_values)
         oldlength = logk_sparse_size
         logk_sparse_size = oldlength + nvals_chan
@@ -424,29 +418,21 @@ hmaskedchans[...] = maskedchans
 #create h5py datasets with optimized chunk shapes
 nbytes = 0
 
-nbytes += writeInChunks(data_obs, f, "hdata_obs", maxChunkBytes = chunkSize)
+nbytes += writeFlatInChunks(data_obs, f, "hdata_obs", maxChunkBytes = chunkSize)
+data_obs = None
 
 if options.sparse:
-  hnorm_sparse = f.create_group("hnorm_sparse")
-  nbytes += writeInChunks(norm_sparse_indices, hnorm_sparse, "indices", maxChunkBytes = chunkSize)
+  nbytes += writeSparse(norm_sparse_indices, norm_sparse_values, norm_sparse_dense_shape, f, "hnorm_sparse", maxChunkBytes = chunkSize)
   norm_sparse_indices = None
-  nbytes += writeInChunks(norm_sparse_values, hnorm_sparse, "values", maxChunkBytes = chunkSize)
   norm_sparse_values = None
-  hnorm_sparse_dense_shape = hnorm_sparse.create_dataset("dense_shape", (len(norm_sparse_dense_shape),), dtype=idxdtype, compression="gzip")
-  hnorm_sparse_dense_shape[...] = norm_sparse_dense_shape
-  
-  hlogk_sparse = f.create_group("hlogk_sparse")
-  nbytes += writeInChunks(logk_sparse_indices, hlogk_sparse, "indices", maxChunkBytes = chunkSize)
+  nbytes += writeSparse(logk_sparse_indices, logk_sparse_values, logk_sparse_dense_shape, f, "hlogk_sparse", maxChunkBytes = chunkSize)
   logk_sparse_indices = None
-  nbytes += writeInChunks(logk_sparse_values, hlogk_sparse, "values", maxChunkBytes = chunkSize)
   logk_sparse_values = None
-  hlogk_sparse_dense_shape = hlogk_sparse.create_dataset("dense_shape", (len(logk_sparse_dense_shape),), dtype=idxdtype, compression="gzip")
-  hlogk_sparse_dense_shape[...] = logk_sparse_dense_shape
 
 else:
-  nbytes += writeInChunks(norm, f, "hnorm", maxChunkBytes = chunkSize)
+  nbytes += writeFlatInChunks(norm, f, "hnorm", maxChunkBytes = chunkSize)
   norm = None
-  nbytes += writeInChunks(logk, f, "hlogk", maxChunkBytes = chunkSize)
+  nbytes += writeFlatInChunks(logk, f, "hlogk", maxChunkBytes = chunkSize)
   logk = None
 
 print("Total raw bytes in arrays = %d" % nbytes)
