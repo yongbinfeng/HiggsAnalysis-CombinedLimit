@@ -178,7 +178,7 @@ for chan in chans:
   if not chan in options.maskedChan:
     #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
     data_obs_chan_hist = MB.getShape(chan,"data_obs")
-    data_obs_chan = hist2array(data_obs_chan_hist, include_overflow=False)
+    data_obs_chan = hist2array(data_obs_chan_hist, include_overflow=False).astype(dtype)
     data_obs_chan_hist.Delete()
     nbinschan = data_obs_chan.shape[0]
     #write to output array
@@ -197,7 +197,7 @@ for chan in chans:
     
     #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
     norm_chan_hist = MB.getShape(chan,proc)
-    norm_chan = hist2array(norm_chan_hist, include_overflow=False)
+    norm_chan = hist2array(norm_chan_hist, include_overflow=False).astype(dtype)
     norm_chan_hist.Delete()
     if norm_chan.shape[0] != nbinschan:
       raise Exception("Mismatch between number of bins in channel for data and template")
@@ -264,7 +264,7 @@ for chan in chans:
           continue
         
         systup_chan_hist = MB.getShape(chan,proc,name+"Up")
-        systup_chan = hist2array(systup_chan_hist, include_overflow=False)
+        systup_chan = hist2array(systup_chan_hist, include_overflow=False).astype(dtype)
         systup_chan_hist.Delete()
         if systup_chan.shape[0] != nbinschan:
           raise Exception("Mismatch between number of bins in channel for data and systematic variation template")
@@ -273,7 +273,7 @@ for chan in chans:
         systup_chan = None
         
         systdown_chan_hist = MB.getShape(chan,proc,name+"Down")
-        systdown_chan = hist2array(systdown_chan_hist, include_overflow=False)
+        systdown_chan = hist2array(systdown_chan_hist, include_overflow=False).astype(dtype)
         systdown_chan_hist.Delete()
         if systdown_chan.shape[0] != nbinschan:
           raise Exception("Mismatch between number of bins in channel for data and systematic variation template")
