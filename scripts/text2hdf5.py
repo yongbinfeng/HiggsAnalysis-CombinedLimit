@@ -18,6 +18,8 @@ ROOT.gROOT.SetBatch(True)
 ROOT.PyConfig.IgnoreCommandLineOptions = True
 argv.remove( '-b-' )
 
+from root_numpy import hist2array
+
 #don't add histograms to global lists (otherwise memory cannot be freed)
 #ROOT.TH1.AddDirectory(False)
 
@@ -118,7 +120,6 @@ for chan in chans:
     data_obs_chan_hist = MB.getShape(chan,"data_obs")
     #exclude overflow/underflow bins
     nbinschan = data_obs_chan_hist.GetSize() - 2
-    #data_obs_chan_hist.Delete()
     nbins += nbinschan
   
   nbinsfull += nbinschan
@@ -156,12 +157,10 @@ if options.sparse:
     idxdtype = 'int64'
   
   norm_sparse_size = 0
-  #norm_sparse_maxsize = nbinsfull*nproc
   norm_sparse_indices = np.zeros([norm_sparse_size,2],idxdtype)
   norm_sparse_values = np.zeros([norm_sparse_size],dtype)
   
   logk_sparse_size = 0
-  #logk_sparse_maxsize = nbinsfull*nproc*2*nsyst
   logk_sparse_normindices = np.zeros([logk_sparse_size,1],idxdtype)
   logk_sparse_systindices = np.zeros([logk_sparse_size,1],idxdtype)
   logk_sparse_values = np.zeros([logk_sparse_size],dtype)
@@ -175,10 +174,11 @@ logkepsilon = math.log(1e-3)
 #counter to keep track of current bin being written
 ibin = 0
 for chan in chans:
+  
   if not chan in options.maskedChan:
     #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
     data_obs_chan_hist = MB.getShape(chan,"data_obs")
-    data_obs_chan = np.array(data_obs_chan_hist).astype(dtype)[1:-1]
+    data_obs_chan = hist2array(data_obs_chan_hist, include_overflow=False)
     data_obs_chan_hist.Delete()
     nbinschan = data_obs_chan.shape[0]
     #write to output array
@@ -189,6 +189,7 @@ for chan in chans:
   
   expchan = DC.exp[chan]
   for iproc,proc in enumerate(procs):
+    
     hasproc = proc in expchan
     
     if not hasproc:
@@ -196,7 +197,7 @@ for chan in chans:
     
     #get histogram, convert to np array with desired type, and exclude underflow/overflow bins
     norm_chan_hist = MB.getShape(chan,proc)
-    norm_chan = np.array(norm_chan_hist).astype(dtype)[1:-1]
+    norm_chan = hist2array(norm_chan_hist, include_overflow=False)
     norm_chan_hist.Delete()
     if norm_chan.shape[0] != nbinschan:
       raise Exception("Mismatch between number of bins in channel for data and template")
@@ -263,7 +264,7 @@ for chan in chans:
           continue
         
         systup_chan_hist = MB.getShape(chan,proc,name+"Up")
-        systup_chan = np.array(systup_chan_hist).astype(dtype)[1:-1]
+        systup_chan = hist2array(systup_chan_hist, include_overflow=False)
         systup_chan_hist.Delete()
         if systup_chan.shape[0] != nbinschan:
           raise Exception("Mismatch between number of bins in channel for data and systematic variation template")
@@ -272,7 +273,7 @@ for chan in chans:
         systup_chan = None
         
         systdown_chan_hist = MB.getShape(chan,proc,name+"Down")
-        systdown_chan = np.array(systdown_chan_hist).astype(dtype)[1:-1]
+        systdown_chan = hist2array(systdown_chan_hist, include_overflow=False)
         systdown_chan_hist.Delete()
         if systdown_chan.shape[0] != nbinschan:
           raise Exception("Mismatch between number of bins in channel for data and systematic variation template")

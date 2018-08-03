@@ -29,6 +29,8 @@ ROOT.gROOT.SetBatch(True)
 ROOT.PyConfig.IgnoreCommandLineOptions = True
 argv.remove( '-b-' )
 
+from root_numpy import array2hist
+
 from array import array
 
 from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,jacobian
@@ -470,7 +472,6 @@ sess.run(globalinit)
 
 xv = sess.run(x)
 
-print("set likelihood offset (and trigger initialization of input from disk and caches)")
 #set likelihood offset
 sess.run(nexpnomassign)
 
@@ -599,34 +600,23 @@ for itoy in range(ntoys):
       covarianceHist  = ROOT.TH2D('covariance_matrix_channel' +outname, 'covariance matrix for ' +dName+' in channel'+outname, int(nparms), 0., 1., int(nparms), 0., 1.)
       correlationHist.GetZaxis().SetRangeUser(-1., 1.)
 
+      #set labels
+      for ip1, p1 in enumerate(parms):
+        correlationHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
+        correlationHist.GetYaxis().SetBinLabel(ip1+1, '%s' % p1)
+        covarianceHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
+        covarianceHist.GetYaxis().SetBinLabel(ip1+1, '%s' % p1)
+
     if errstatus==0:
-      #jac = jaccomp.compute(sess)
-      #jact = np.transpose(jac)
-      #invhessoutval = np.matmul(jac,np.matmul(invhessval,jact))
-      sigmasv = np.sqrt(np.diag(invhessoutval))[:npoi]
+      parameterErrors = np.sqrt(np.diag(invhessoutval))
+      sigmasv = parameterErrors[:npoi]
       if not options.toys > 0:
-        parameterErrors = np.sqrt(np.diag(invhessoutval))
         variances2D     = parameterErrors[np.newaxis].T * parameterErrors
         correlationMatrix = np.divide(invhessoutval, variances2D)
-        for ip1, p1 in enumerate(parms):
-          for ip2, p2 in enumerate(parms):
-            correlationHist.SetBinContent(ip1+1, ip2+1, correlationMatrix[ip1][ip2])
-            correlationHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
-            correlationHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)
-            covarianceHist.SetBinContent(ip1+1, ip2+1, invhessoutval[ip1][ip2])
-            covarianceHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
-            covarianceHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)
+        array2hist(correlationMatrix, correlationHist)
+        array2hist(invhessoutval, covarianceHist)
     else:
       sigmasv = -99.*np.ones_like(outvals)
-      if not options.toys > 0:
-        for ip1, p1 in enumerate(parms):
-          for ip2, p2 in enumerate(parms):
-            correlationHist.SetBinContent(ip1+1, ip2+1, -1.)
-            correlationHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
-            correlationHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)
-            covarianceHist.SetBinContent(ip1+1, ip2+1, -1.)
-            covarianceHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
-            covarianceHist.GetYaxis().SetBinLabel(ip2+1, '%s' % p2)
     
     minoserrsup = -99.*np.ones_like(sigmasv)
     minoserrsdown = -99.*np.ones_like(sigmasv)
@@ -637,10 +627,6 @@ for itoy in range(ntoys):
   
     outminosupd[outname] = minoserrsup
     outminosdownd[outname] = minoserrsdown
-
-    if not options.toys > 0:
-      correlationHist.Write()
-      covarianceHist .Write()
 
   for var in options.minos:
     print("running minos-like algorithm for %s" % var)
