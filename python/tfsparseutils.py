@@ -34,6 +34,11 @@ def simple_sparse_tensor_dense_matmul(sp_a,
         adjoint_a=adjoint_a,
         adjoint_b=adjoint_b)
 
+def makeCache(x):
+  it = tf.data.Dataset.from_tensors(x).cache().repeat().make_initializable_iterator()
+  tf.add_to_collection('cache_initializers', it.initializer)
+  return it.get_next()
+
 def flatten_indices(indices,shape):
   if indices.dtype != tf.int32:
     indices = tf.cast(indices,tf.int32)
@@ -76,6 +81,25 @@ def simple_sparse_slice(in_sparse, start, end):
     out_shape.append(e-s)
   
   return SimpleSparseTensor(out_indices,out_values,out_shape)
+
+def simple_sparse_slice0begin(in_sparse, begin, doCache = False):
+
+  out_shape = [in_sparse.dense_shape[0] - begin] + list(in_sparse.dense_shape)[1:]
+  offset = [begin] + [0]*(len(in_sparse.dense_shape)-1)
+
+  idxs = tf.where(in_sparse.indices[:,0] >= begin)
+  idxs = tf.squeeze(idxs,-1)
+  idxs = tf.pad(idxs, [[0,1]], constant_values=in_sparse.indices.shape[0])
+  startidx = idxs[0]
+  startidx = tf.cast(startidx,tf.shape(in_sparse.indices).dtype)
+        
+  out_indices = in_sparse.indices[startidx:] - offset
+  
+  if doCache:
+    startidx, out_indices = makeCache((startidx, out_indices))
+  
+  out_values = in_sparse.values[startidx:]
+  return SimpleSparseTensor(out_indices, out_values, out_shape)
 
 def simple_sparse_to_dense(in_sparse):
   return tf.scatter_nd(in_sparse.indices, in_sparse.values, in_sparse.dense_shape)

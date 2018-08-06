@@ -16,7 +16,7 @@ import numpy as np
 import h5py
 import h5py_cache
 from HiggsAnalysis.CombinedLimit.tfh5pyutils import maketensor,makesparsetensor
-from HiggsAnalysis.CombinedLimit.tfsparseutils import simple_sparse_tensor_dense_matmul, sparse_reduce_sum_0, simple_sparse_slice, simple_sparse_to_dense, SimpleSparseTensor
+from HiggsAnalysis.CombinedLimit.tfsparseutils import simple_sparse_tensor_dense_matmul, simple_sparse_slice0begin, simple_sparse_to_dense, SimpleSparseTensor
 import scipy
 import math
 import time
@@ -112,11 +112,6 @@ else:
   norm = maketensor(hnorm)
   logk = maketensor(hlogk)
 
-#sess = tf.Session()
-
-#sess.run(tf.reduce_sum(logk))
-#exit()
-
 if options.nonNegativePOI:
   boundmode = 1
 else:
@@ -195,8 +190,9 @@ if sparse:
   nexpfull = simple_sparse_tensor_dense_matmul(snormnorm_sparse,mrnorm)
   nexpfull = tf.squeeze(nexpfull,-1)
 
-  snormnormmasked_sparse = simple_sparse_slice(snormnorm_sparse,[nbins,0],[nbinsfull,nsignals])
-  snormnormmasked = simple_sparse_to_dense(snormnormmasked_sparse)
+  snormnormmasked0_sparse = simple_sparse_slice0begin(snormnorm_sparse, nbins, doCache=True)
+  snormnormmasked0 = simple_sparse_to_dense(snormnormmasked0_sparse)
+  snormnormmasked = snormnormmasked0[:,:nsignals]
   
 else:
   #matrix encoding effect of nuisance parameters
@@ -467,6 +463,8 @@ sess = tf.Session(config=config)
 #note that initializing all variables also triggers reading the hdf5 arrays from disk and populating the caches
 print("initializing variables (this will trigger loading of large arrays from disk)")
 sess.run(globalinit)
+for cacheinit in tf.get_collection("cache_initializers"):
+  sess.run(cacheinit)
 
 xv = sess.run(x)
 
