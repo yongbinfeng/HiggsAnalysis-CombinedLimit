@@ -365,6 +365,9 @@ tree.Branch('edmval',tedmval,'edmval/F')
 tnllval = array('f',[0.])
 tree.Branch('nllval',tnllval,'nllval/F')
 
+tnllvalfull = array('f',[0.])
+tree.Branch('nllvalfull',tnllvalfull,'nllvalfull/F')
+
 tdnllval = array('f',[0.])
 tree.Branch('dnllval',tdnllval,'dnllval/F')
 
@@ -551,7 +554,7 @@ for itoy in range(ntoys):
     ret = minimizer.minimize(sess)
 
   #get fit output
-  xval, outvalss, thetavals, theta0vals, nllval = sess.run([x,outputs,theta,theta0,l])
+  xval, outvalss, thetavals, theta0vals, nllval, nllvalfull = sess.run([x,outputs,theta,theta0,l,lfull])
   dnllval = 0.
   #get inverse hessians for error calculation (can fail if matrix is not invertible)
   try:
@@ -569,7 +572,7 @@ for itoy in range(ntoys):
   else:
     status = 1
   
-  print("status = %i, errstatus = %i, nllval = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,edmval,mineigval))  
+  print("status = %i, errstatus = %i, nllval = %f, nllvalfull = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,nllvalfull,edmval,mineigval))  
   
   if errstatus==0:
     fullsigmasv = np.sqrt(np.diag(invhessval))
@@ -684,6 +687,7 @@ for itoy in range(ntoys):
   terrstatus[0] = errstatus
   tedmval[0] = edmval
   tnllval[0] = nllval
+  tnllvalfull[0] = nllvalfull
   tdnllval[0] = dnllval
   tscanidx[0] = -1
   tndof[0] = x.shape[0]
@@ -761,11 +765,12 @@ for itoy in range(ntoys):
         a.load(aval,sess)
         scanminimizer.minimize(sess)
     
-        scanoutvalss,scanthetavals, nllvalscan = sess.run([outputs,theta,l])
+        scanoutvalss,scanthetavals, nllvalscan, nllvalscanfull = sess.run([outputs,theta,l,lfull])
         dnllvalscan = nllvalscan - nllval
                           
         tscanidx[0] = erridx
         tnllval[0] = nllvalscan
+        tnllvalfull[0] = nllvalscanfull
         tdnllval[0] = dnllvalscan
         
         for outvals,toutvals in zip(scanoutvalss,toutvalss):
