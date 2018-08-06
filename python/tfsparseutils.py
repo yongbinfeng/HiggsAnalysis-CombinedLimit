@@ -34,11 +34,14 @@ def simple_sparse_tensor_dense_matmul(sp_a,
         adjoint_a=adjoint_a,
         adjoint_b=adjoint_b)
 
+#helper function to cache static results using data api
 def makeCache(x):
   it = tf.data.Dataset.from_tensors(x).cache().repeat().make_initializable_iterator()
   tf.add_to_collection('cache_initializers', it.initializer)
   return it.get_next()
 
+#slice a sparse tensor along axis 0 from begin to the end of the array
+#cache the indices, since these should not depend on the values in the sparse tensor
 def simple_sparse_slice0begin(in_sparse, begin, doCache = False):
 
   out_shape = [in_sparse.dense_shape[0] - begin] + list(in_sparse.dense_shape)[1:]

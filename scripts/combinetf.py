@@ -190,6 +190,10 @@ if sparse:
   nexpfull = simple_sparse_tensor_dense_matmul(snormnorm_sparse,mrnorm)
   nexpfull = tf.squeeze(nexpfull,-1)
 
+  #slice the sparse tensor along axis 0 only, since this is simpler than slicing in
+  #other dimensions due to the ordering of the tensor,
+  #after this the result should be relatively small in any case and  further
+  #manipulations can be done more efficiently after converting to dense
   snormnormmasked0_sparse = simple_sparse_slice0begin(snormnorm_sparse, nbins, doCache=True)
   snormnormmasked0 = simple_sparse_to_dense(snormnormmasked0_sparse)
   snormnormmasked = snormnormmasked0[:,:nsignals]
@@ -472,6 +476,8 @@ xv = sess.run(x)
 sess.run(nexpnomassign)
 
 outvalsgens,thetavalsgen = sess.run([outputs,theta])
+
+#all caches should be filled by now
 
 #prefit to data if needed
 if options.toys>0 and options.toysFrequentist and not options.bypassFrequentistFit:  

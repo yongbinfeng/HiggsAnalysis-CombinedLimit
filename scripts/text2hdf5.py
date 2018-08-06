@@ -370,7 +370,7 @@ if options.sparse:
   norm_sort_indices = np.argsort(np.ravel_multi_index(np.transpose(norm_sparse_indices),norm_sparse_dense_shape))
   norm_sparse_indices = norm_sparse_indices[norm_sort_indices]
   norm_sparse_values = norm_sparse_values[norm_sort_indices]
-  
+    
   #now permute the indices of the first dimension of logk_sparse corresponding to the resorting of norm_sparse
   
   #compute the inverse permutation from the sorting of norm_sparse
