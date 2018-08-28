@@ -4,11 +4,22 @@ from sys import argv, stdout, stderr, exit, modules
 from optparse import OptionParser
 
 import tensorflow as tf
+
+from tensorflow.python.framework import ops
+from tensorflow.python.framework import sparse_tensor
+from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import gen_sparse_ops
+from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import sparse_ops
+
 import numpy as np
+import h5py
+import h5py_cache
+from HiggsAnalysis.CombinedLimit.tfh5pyutils import maketensor,makesparsetensor
+from HiggsAnalysis.CombinedLimit.tfsparseutils import simple_sparse_tensor_dense_matmul, simple_sparse_slice0begin, simple_sparse_to_dense, SimpleSparseTensor
 import scipy
-
 import math
-
+import time
 
 
 # import ROOT with a fix to get batch mode (http://root.cern.ch/phpBB3/viewtopic.php?t=3198)
@@ -18,9 +29,11 @@ ROOT.gROOT.SetBatch(True)
 ROOT.PyConfig.IgnoreCommandLineOptions = True
 argv.remove( '-b-' )
 
+from root_numpy import array2hist
+
 from array import array
 
-from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,JacobianCompute
+from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,jacobian
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 parser.add_option("-t","--toys", default=0, type=int, help="run a given number of toys, 0 fits the data (default), and -1 fits the asimov toy")
@@ -37,6 +50,10 @@ parser.add_option("","--scan", default=[], type="string", action="append", help=
 parser.add_option("","--scanPoints", default=16, type=int, help="default number of points for likelihood scan")
 parser.add_option("","--scanRange", default=3., type=float, help="default scan range in terms of hessian uncertainty")
 parser.add_option("","--nThreads", default=-1., type=int, help="set number of threads (default is -1: use all available cores)")
+parser.add_option("","--POIMode", default="mu",type="string", help="mode for POI's")
+parser.add_option("","--nonNegativePOI", default=True, action='store_true', help="force signal strengths to be non-negative")
+parser.add_option("","--POIDefault", default=1., type=float, help="mode for POI's")
+parser.add_option("","--doBenchmark", default=False, action='store_true', help="run benchmarks")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -50,39 +67,232 @@ tf.set_random_seed(seed)
 
 options.fileName = args[0]
 
-tf.train.import_meta_graph(options.fileName)
+cacheSize = 4*1024**2
+#TODO open file an extra time and enforce sufficient cache size for second file open
+f = h5py_cache.File(options.fileName, chunk_cache_mem_size=cacheSize, mode='r')
 
-variables = tf.global_variables()
+#load text arrays from file
+procs = f['hprocs'][...]
+signals = f['hsignals'][...]
+systs = f['hsysts'][...]
+maskedchans = f['hmaskedchans'][...]
 
-graph = tf.get_default_graph()
-l = graph.get_tensor_by_name("loss:0")
-x = filter(lambda x: x.name == 'x:0', variables)[0]
-xpoi = graph.get_tensor_by_name("xpoi:0")
-theta = graph.get_tensor_by_name("theta:0")
-theta0 = filter(lambda x: x.name == 'theta0:0', variables)[0]
-nexp = graph.get_tensor_by_name("nexp:0")
-nexpnom = graph.get_tensor_by_name("nexpnom:0")
-nobs = filter(lambda x: x.name == 'nobs:0', variables)[0]
+#load arrays from file
+hdata_obs = f['hdata_obs']
 
-outputs = tf.get_collection("outputs")
+sparse = not 'hnorm' in f
 
-cprocs = graph.get_tensor_by_name("cprocs:0")
-csignals = graph.get_tensor_by_name("csignals:0")
-csysts = graph.get_tensor_by_name("csysts:0")
-cpois = graph.get_tensor_by_name("cpois:0")
+if sparse:
+  hnorm_sparse = f['hnorm_sparse']
+  hlogk_sparse = f['hlogk_sparse']
+  nbinsfull = hnorm_sparse.attrs['dense_shape'][0]
+else:  
+  hnorm = f['hnorm']
+  hlogk = f['hlogk']
+  nbinsfull = hnorm.attrs['original_shape'][0]
 
-dtype = x.dtype.as_numpy_dtype
-npoi = cpois.shape[0]
-nsyst = csysts.shape[0]
+#infer some metadata from loaded information
+dtype = hdata_obs.dtype
+nbins = hdata_obs.shape[-1]
+nbinsmasked = nbinsfull - nbins
+nproc = len(procs)
+nsyst = len(systs)
+nsignals = len(signals)
+
+#build tensorflow graph for likelihood calculation
+
+#start by creating tensors which read in the hdf5 arrays (optimized for memory consumption)
+#note that this does NOT trigger the actual reading from disk, since this only happens when the
+#returned tensors are evaluated for the first time inside the graph
+data_obs = maketensor(hdata_obs)
+if sparse:
+  norm_sparse = makesparsetensor(hnorm_sparse)
+  logk_sparse = makesparsetensor(hlogk_sparse)
+else:
+  norm = maketensor(hnorm)
+  logk = maketensor(hlogk)
+
+if options.nonNegativePOI:
+  boundmode = 1
+else:
+  boundmode = 0
+
+pois = []  
+  
+if options.POIMode == "mu":
+  npoi = nsignals
+  poidefault = options.POIDefault*tf.ones([npoi],dtype=dtype)
+  for signal in signals:
+    pois.append(signal)
+elif options.POIMode == "none":
+  npoi = 0
+  poidefault = tf.zeros([],dtype=dtype)
+else:
+  raise Exception("unsupported POIMode")
+
 nparms = npoi + nsyst
+parms = np.concatenate([pois,systs])
 
-grad = tf.gradients(l,x)[0]
-hesscomp = JacobianCompute(grad,x)
+if boundmode==0:
+  xpoidefault = poidefault
+elif boundmode==1:
+  xpoidefault = tf.sqrt(poidefault)
 
-jaccomps = []
+print("nbins = %d, nbinsfull = %d, nproc = %d, npoi = %d, nsyst = %d" % (nbins,nbinsfull,nproc, npoi, nsyst))
+
+#data
+nobs = tf.Variable(data_obs, trainable=False, name="nobs")
+theta0 = tf.Variable(tf.zeros([nsyst],dtype=dtype), trainable=False, name="theta0")
+
+#tf variable containing all fit parameters
+thetadefault = tf.zeros([nsyst],dtype=dtype)
+if npoi>0:
+  xdefault = tf.concat([xpoidefault,thetadefault], axis=0)
+else:
+  xdefault = thetadefault
+  
+x = tf.Variable(xdefault, name="x")
+
+xpoi = x[:npoi]
+theta = x[npoi:]
+
+if boundmode == 0:
+  poi = xpoi
+elif boundmode == 1:
+  poi = tf.square(xpoi)
+
+#vector encoding effect of signal strengths
+if options.POIMode == "mu":
+  r = poi
+elif options.POIMode == "none":
+  r = tf.ones([nsignals],dtype=dtype)
+
+rnorm = tf.concat([r,tf.ones([nproc-nsignals],dtype=dtype)],axis=0)
+
+#interpolation for asymmetric log-normal
+twox = 2.*theta
+twox2 = twox*twox
+alpha =  0.125 * twox * (twox2 * (3*twox2 - 10.) + 15.)
+alpha = tf.clip_by_value(alpha,-1.,1.)
+
+thetaalpha = theta*alpha
+
+if sparse:
+  mthetaalpha = tf.concat([theta,thetaalpha],axis=0) #now has shape [2*nsyst]
+  mthetaalpha = tf.expand_dims(mthetaalpha,-1) #now has shape [2*nsyst, 1]
+  
+  logsnorm = simple_sparse_tensor_dense_matmul(logk_sparse,mthetaalpha)
+  logsnorm = tf.squeeze(logsnorm,-1)
+  snorm = tf.exp(logsnorm)
+  
+  snormnorm_sparse = SimpleSparseTensor(norm_sparse.indices, snorm*norm_sparse.values, norm_sparse.dense_shape)
+  mrnorm = tf.expand_dims(rnorm,-1)
+  nexpfull = simple_sparse_tensor_dense_matmul(snormnorm_sparse,mrnorm)
+  nexpfull = tf.squeeze(nexpfull,-1)
+
+  #slice the sparse tensor along axis 0 only, since this is simpler than slicing in
+  #other dimensions due to the ordering of the tensor,
+  #after this the result should be relatively small in any case and  further
+  #manipulations can be done more efficiently after converting to dense
+  snormnormmasked0_sparse = simple_sparse_slice0begin(snormnorm_sparse, nbins, doCache=True)
+  snormnormmasked0 = simple_sparse_to_dense(snormnormmasked0_sparse)
+  snormnormmasked = snormnormmasked0[:,:nsignals]
+  
+else:
+  #matrix encoding effect of nuisance parameters
+  #memory efficient version (do summation together with multiplication in a single tensor contraction step)
+  #this is equivalent to 
+  #alpha = tf.reshape(alpha,[-1,1,1])
+  #theta = tf.reshape(theta,[-1,1,1])
+  #logk = logkavg + alpha*logkhalfdiff
+  #logktheta = theta*logk
+  #logsnorm = tf.reduce_sum(logktheta, axis=0)
+  
+  mthetaalpha = tf.stack([theta,thetaalpha],axis=0) #now has shape [2,nsyst]
+  mthetaalpha = tf.reshape(mthetaalpha,[2*nsyst,1])
+  mlogk = tf.reshape(logk,[nbinsfull*nproc,2*nsyst])
+  logsnorm = tf.matmul(mlogk,mthetaalpha)
+  logsnorm = tf.reshape(logsnorm,[nbinsfull,nproc])
+
+  snorm = tf.exp(logsnorm)
+
+  #final expected yields per-bin including effect of signal
+  #strengths and nuisance parmeters
+  #memory efficient version (do summation together with multiplication in a single tensor contraction step)
+  #equivalent to (with some reshaping to explicitly match indices)
+  #rnorm = tf.reshape(rnorm,[1,-1])
+  #pnormfull = rnorm*snorm*norm
+  #nexpfull = tf.reduce_sum(pnormfull,axis=-1)
+  snormnorm = snorm*norm
+  mrnorm = tf.reshape(rnorm,[-1,1])
+  mrnorm = tf.expand_dims(rnorm,-1)
+  nexpfull = tf.matmul(snormnorm, mrnorm)
+  nexpfull = tf.squeeze(nexpfull,-1)
+
+  snormnormmasked = snormnorm[nbins:,:nsignals]
+  
+pmaskedexp = r*tf.reduce_sum(snormnormmasked,axis=0)
+
+maskedexp = nexpfull[nbins:]
+
+#matrix multiplication below is equivalent to
+#pmaskedexpnorm = r*tf.reduce_sum(snormnormmasked/maskedexp, axis=0)
+
+mmaskedexpr = tf.expand_dims(tf.reciprocal(maskedexp),0)
+pmaskedexpnorm = tf.matmul(mmaskedexpr,snormnormmasked)
+pmaskedexpnorm = tf.squeeze(pmaskedexpnorm,0)
+pmaskedexpnorm = r*pmaskedexpnorm
+ 
+nexp = nexpfull[:nbins]
+
+nexpsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexp)
+lognexp = tf.log(nexpsafe)
+
+nexpnom = tf.Variable(nexp, trainable=False, name="nexpnom")
+nexpnomsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexpnom)
+lognexpnom = tf.log(nexpnomsafe)
+
+#final likelihood computation
+
+#poisson term  
+lnfull = tf.reduce_sum(-nobs*lognexp + nexp, axis=-1)
+
+#poisson term with offset to improve numerical precision
+ln = tf.reduce_sum(-nobs*(lognexp-lognexpnom) + nexp-nexpnom, axis=-1)
+
+#constraints
+lc = tf.reduce_sum(0.5*tf.square(theta - theta0))
+
+l = ln + lc
+lfull = lnfull + lc
+ 
+#name outputs
+poi = tf.identity(poi, name=options.POIMode)
+pmaskedexp = tf.identity(pmaskedexp, "pmaskedexp")
+pmaskedexpnorm = tf.identity(pmaskedexpnorm, "pmaskedexpnorm")
+ 
+outputs = []
+
+outputs.append(poi)
+if nbinsmasked>0:
+  outputs.append(pmaskedexp)
+  outputs.append(pmaskedexpnorm)
+
+grad = tf.gradients(l,x,gate_gradients=True)[0]
+hessian = jacobian(grad,x,gate_gradients=True,parallel_iterations=1,back_prop=False)
+
+eigvals = tf.self_adjoint_eigvals(hessian)
+mineigv = tf.reduce_min(eigvals)
+isposdef = mineigv > 0.
+invhessian = tf.matrix_inverse(hessian)
+gradcol = tf.reshape(grad,[-1,1])
+edm = 0.5*tf.matmul(tf.matmul(gradcol,invhessian,transpose_a=True),gradcol)
+
+invhessianouts = []
 for output in outputs:
-  jaccomps.append(JacobianCompute(tf.concat([output,theta],axis=0),x))
-
+  jacout = jacobian(tf.concat([output,theta],axis=0),x,gate_gradients=True,parallel_iterations=1,back_prop=False)
+  invhessianout = tf.matmul(jacout,tf.matmul(invhessian,jacout,transpose_b=True))
+  invhessianouts.append(invhessianout)
 
 l0 = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
 x0 = tf.Variable(np.zeros(x.shape,dtype=dtype),trainable=False)
@@ -121,30 +331,14 @@ for scanname in scannames:
 
 globalinit = tf.global_variables_initializer()
 nexpnomassign = tf.assign(nexpnom,nexp)
+dataobsassign = tf.assign(nobs,data_obs)
 asimovassign = tf.assign(nobs,nexp)
-#asimovrandomizestart = tf.assign(x,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(x,invhess).sample(),lb,ub))
+asimovrandomizestart = tf.assign(x,tf.clip_by_value(tf.contrib.distributions.MultivariateNormalFullCovariance(x,invhessian).sample(),lb,ub))
 bootstrapassign = tf.assign(nobs,tf.random_poisson(nobs,shape=[],dtype=dtype))
 toyassign = tf.assign(nobs,tf.random_poisson(nexp,shape=[],dtype=dtype))
 frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=theta.shape,dtype=dtype))
 thetastartassign = tf.assign(x, tf.concat([xpoi,theta0],axis=0))
 bayesassign = tf.assign(x, tf.concat([xpoi,theta+tf.random_normal(shape=theta.shape,dtype=dtype)],axis=0))
-
-#initialize tf session
-if options.nThreads>0:
-  config = tf.ConfigProto(intra_op_parallelism_threads=options.nThreads, inter_op_parallelism_threads=options.nThreads)
-else:
-  config = None
-
-sess = tf.Session(config=config)
-sess.run(globalinit)
-
-#rthetav = np.concatenate((options.expectSignal*np.ones([npoi],dtype=dtype), np.zeros([nsyst],dtype=dtype)), axis=0)
-xv = sess.run(x)
-data_obs = sess.run(nobs)
-procs, signals, systs, pois = sess.run([cprocs,csignals,csysts,cpois])
-signals = signals.tolist()
-systs = systs.tolist()
-pois = pois.tolist()
 
 #initialize output tree
 f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
@@ -170,6 +364,9 @@ tree.Branch('edmval',tedmval,'edmval/F')
 
 tnllval = array('f',[0.])
 tree.Branch('nllval',tnllval,'nllval/F')
+
+tnllvalfull = array('f',[0.])
+tree.Branch('nllvalfull',tnllvalfull,'nllvalfull/F')
 
 tdnllval = array('f',[0.])
 tree.Branch('dnllval',tdnllval,'dnllval/F')
@@ -248,7 +445,7 @@ for syst in systs:
   tthetaminosups.append(tthetaminosup)
   tthetaminosdowns.append(tthetaminosdown)
   tthetagenvals.append(tthetagenval)
-  tree.Branch(systname, tthetaval, '%s/F' % systname)
+  tree.Branch('%s' % systname, tthetaval, '%s/F' % systname)
   tree.Branch('%s_In' % systname, ttheta0val, '%s_In/F' % systname)
   tree.Branch('%s_err' % systname, tthetaerr, '%s_err/F' % systname)
   tree.Branch('%s_minosup' % systname, tthetaminosup, '%s_minosup/F' % systname)
@@ -259,10 +456,28 @@ ntoys = options.toys
 if ntoys <= 0:
   ntoys = 1
 
+#initialize tf session
+if options.nThreads>0:
+  config = tf.ConfigProto(intra_op_parallelism_threads=options.nThreads, inter_op_parallelism_threads=options.nThreads)
+else:
+  config = None
+
+sess = tf.Session(config=config)
+
+#note that initializing all variables also triggers reading the hdf5 arrays from disk and populating the caches
+print("initializing variables (this will trigger loading of large arrays from disk)")
+sess.run(globalinit)
+for cacheinit in tf.get_collection("cache_initializers"):
+  sess.run(cacheinit)
+
+xv = sess.run(x)
+
 #set likelihood offset
 sess.run(nexpnomassign)
 
 outvalsgens,thetavalsgen = sess.run([outputs,theta])
+
+#all caches should be filled by now
 
 #prefit to data if needed
 if options.toys>0 and options.toysFrequentist and not options.bypassFrequentistFit:  
@@ -283,13 +498,12 @@ for itoy in range(ntoys):
     print("Running fit to asimov toy")
     sess.run(asimovassign)
     if options.randomizeStart:
-      raise Exception("Randomization of starting values is not currently implemented.")
-      #sess.run(asimovrandomizestart)
+      sess.run(asimovrandomizestart)
     else:
       dofit = False
   elif options.toys == 0:
     print("Running fit to observed data")
-    nobs.load(data_obs,sess)
+    sess.run(dataobsassign)
   else:
     print("Running toy %i" % itoy)  
     if options.toysFrequentist:
@@ -303,7 +517,7 @@ for itoy in range(ntoys):
       
     if options.bootstrapData:
       #randomize from observed data
-      nobs.load(data_obs,sess)
+      sess.run(dataobsassign)
       sess.run(bootstrapassign)
     else:
       #randomize from expectation
@@ -313,36 +527,59 @@ for itoy in range(ntoys):
   sess.run(thetastartassign)
   #set likelihood offset
   sess.run(nexpnomassign)
+  
+  if options.doBenchmark:
+    neval = 10
+    t0 = time.time()
+    for i in range(neval):
+      print(i)
+      lval = sess.run([l])
+    t = time.time() - t0
+    print("%d l evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
+        
+    neval = 10
+    t0 = time.time()
+    for i in range(neval):
+      print(i)
+      lval,gval = sess.run([l,grad])
+    t = time.time() - t0
+    print("%d l+grad evals in %f seconds, %f seconds per eval" % (neval,t,t/neval))
+        
+    neval = 1
+    t0 = time.time()
+    for i in range(neval):
+      hessval = sess.run([hessian])
+    t = time.time() - t0
+    print("%d hessian evals in %f seconds, %f seconds per eval" % (neval,t,t/max(1,neval)))
+    
+    exit()
+  
   if dofit:
     ret = minimizer.minimize(sess)
 
   #get fit output
-  xval, outvalss, thetavals, theta0vals, nllval, gradval = sess.run([x,outputs,theta,theta0,l,grad])
-  #compute hessian
-  hessval = hesscomp.compute(sess)
-  #print(hessval.shape)
-  #print(hessval)
+  xval, outvalss, thetavals, theta0vals, nllval, nllvalfull = sess.run([x,outputs,theta,theta0,l,lfull])
   dnllval = 0.
-  mineig = np.amin(np.linalg.eigvalsh(hessval))
-  isposdef =  mineig > 0.
-  gradcol = np.reshape(gradval,[-1,1])
+  #get inverse hessians for error calculation (can fail if matrix is not invertible)
   try:
-    invhessval = np.linalg.inv(hessval)
-    edmval = 0.5*np.matmul(np.matmul(np.transpose(gradcol),invhessval),gradcol)
+    invhessval,mineigval,isposdefval,edmval,invhessoutvals = sess.run([invhessian,mineigv,isposdef,edm,invhessianouts])
     errstatus = 0
   except:
     edmval = -99.
+    isposdefval = False
+    mineigval = -99.
+    invhessoutvals = outvalss
     errstatus = 1
     
-  if isposdef and edmval > -edmtol:
+  if isposdefval and edmval > -edmtol:
     status = 0
   else:
     status = 1
   
-  print("status = %i, errstatus = %i, nllval = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,edmval,mineig))  
+  print("status = %i, errstatus = %i, nllval = %f, nllvalfull = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,nllvalfull,edmval,mineigval))  
   
-  fullsigmasv = np.sqrt(np.diag(invhessval))
   if errstatus==0:
+    fullsigmasv = np.sqrt(np.diag(invhessval))
     thetasigmasv = fullsigmasv[npoi:]
   else:
     thetasigmasv = -99.*np.ones_like(thetavals)
@@ -356,7 +593,7 @@ for itoy in range(ntoys):
   outminosupd = {}
   outminosdownd = {}
 
-  for output, outvals,jaccomp in zip(outputs, outvalss,jaccomps):
+  for output, outvals,invhessoutval in zip(outputs, outvalss,invhessoutvals):
     outname = ":".join(output.name.split(":")[:-1])    
 
     if not options.toys > 0:
@@ -365,34 +602,23 @@ for itoy in range(ntoys):
       covarianceHist  = ROOT.TH2D('covariance_matrix_channel' +outname, 'covariance matrix for ' +dName+' in channel'+outname, int(nparms), 0., 1., int(nparms), 0., 1.)
       correlationHist.GetZaxis().SetRangeUser(-1., 1.)
 
+      #set labels
+      for ip1, p1 in enumerate(parms):
+        correlationHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
+        correlationHist.GetYaxis().SetBinLabel(ip1+1, '%s' % p1)
+        covarianceHist.GetXaxis().SetBinLabel(ip1+1, '%s' % p1)
+        covarianceHist.GetYaxis().SetBinLabel(ip1+1, '%s' % p1)
+
     if errstatus==0:
-      jac = jaccomp.compute(sess)
-      jact = np.transpose(jac)
-      invhessoutval = np.matmul(jac,np.matmul(invhessval,jact))
-      sigmasv = np.sqrt(np.diag(invhessoutval))[:npoi]
+      parameterErrors = np.sqrt(np.diag(invhessoutval))
+      sigmasv = parameterErrors[:npoi]
       if not options.toys > 0:
-        parameterErrors = np.sqrt(np.diag(invhessoutval))
         variances2D     = parameterErrors[np.newaxis].T * parameterErrors
         correlationMatrix = np.divide(invhessoutval, variances2D)
-        for ip1, p1 in enumerate(pois+systs):
-          for ip2, p2 in enumerate(pois+systs):
-            correlationHist.SetBinContent(ip1+1, ip2+1, correlationMatrix[ip1][ip2])
-            correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
-            correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
-            covarianceHist.SetBinContent(ip1+1, ip2+1, invhessoutval[ip1][ip2])
-            covarianceHist.GetXaxis().SetBinLabel(ip1+1, p1)
-            covarianceHist.GetYaxis().SetBinLabel(ip2+1, p2)
+        array2hist(correlationMatrix, correlationHist)
+        array2hist(invhessoutval, covarianceHist)
     else:
       sigmasv = -99.*np.ones_like(outvals)
-      if not options.toys > 0:
-        for ip1, p1 in enumerate(pois+systs):
-          for ip2, p2 in enumerate(pois+systs):
-            correlationHist.SetBinContent(ip1+1, ip2+1, -1.)
-            correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
-            correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
-            covarianceHist.SetBinContent(ip1+1, ip2+1, -1.)
-            covarianceHist.GetXaxis().SetBinLabel(ip1+1, p1)
-            covarianceHist.GetYaxis().SetBinLabel(ip2+1, p2)
     
     minoserrsup = -99.*np.ones_like(sigmasv)
     minoserrsdown = -99.*np.ones_like(sigmasv)
@@ -403,10 +629,6 @@ for itoy in range(ntoys):
   
     outminosupd[outname] = minoserrsup
     outminosdownd[outname] = minoserrsdown
-
-    if not options.toys > 0:
-      correlationHist.Write()
-      covarianceHist .Write()
 
   for var in options.minos:
     print("running minos-like algorithm for %s" % var)
@@ -469,6 +691,7 @@ for itoy in range(ntoys):
   terrstatus[0] = errstatus
   tedmval[0] = edmval
   tnllval[0] = nllval
+  tnllvalfull[0] = nllvalfull
   tdnllval[0] = dnllval
   tscanidx[0] = -1
   tndof[0] = x.shape[0]
@@ -546,11 +769,12 @@ for itoy in range(ntoys):
         a.load(aval,sess)
         scanminimizer.minimize(sess)
     
-        scanoutvalss,scanthetavals, nllvalscan = sess.run([outputs,theta,l])
+        scanoutvalss,scanthetavals, nllvalscan, nllvalscanfull = sess.run([outputs,theta,l,lfull])
         dnllvalscan = nllvalscan - nllval
                           
         tscanidx[0] = erridx
         tnllval[0] = nllvalscan
+        tnllvalfull[0] = nllvalscanfull
         tdnllval[0] = dnllvalscan
         
         for outvals,toutvals in zip(scanoutvalss,toutvalss):

@@ -21,24 +21,14 @@ from scipy.optimize import SR1, LinearConstraint, NonlinearConstraint, Bounds
 
 __all__ = ['ScipyTROptimizerInterface']
 
-class JacobianCompute:
-  def __init__(self, ys, xs):
-    self.nrows = xs.shape[0]
-    self.rowidx = tf.placeholder(tf.int32, shape=[])
-    self.jacrow = tf.gradients(ys[self.rowidx],xs)[0]
-    
-  def compute(self,sess):
-    jacrows = []
-    for irow in range(self.nrows):
-      jacrows.append(sess.run(self.jacrow, feed_dict = {self.rowidx: irow}))
-    return np.stack(jacrows,axis=0)
-
 def jacobian(ys,
              xs,
              name="hessians",
              colocate_gradients_with_ops=False,
              gate_gradients=False,
-             aggregation_method=None):
+             aggregation_method=None,
+             parallel_iterations=10,
+             back_prop = True):
   """Constructs the jacobian of sum of `ys` with respect to `x` in `xs`.
   `jacobians()` adds ops to the graph to output the Hessian matrix of `ys`
   with respect to `xs`.  It returns a list of `Tensor` of length `len(xs)`
@@ -84,8 +74,10 @@ def jacobian(ys,
   _, hessian = control_flow_ops.while_loop(
       lambda j, _: j < n,
       lambda j, result: (j + 1,
-                          result.write(j, tf.gradients(gradient[j], x)[0])),
-      loop_vars
+                          result.write(j, tf.gradients(gradient[j], x, colocate_gradients_with_ops=colocate_gradients_with_ops, gate_gradients=gate_gradients, aggregation_method=aggregation_method)[0])),
+      loop_vars,
+      parallel_iterations = parallel_iterations,
+      back_prop = back_prop,
   )
 
   _shape = array_ops.shape(x)
