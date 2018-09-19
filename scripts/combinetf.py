@@ -359,17 +359,17 @@ tree.Branch('errstatus',terrstatus,'errstatus/I')
 tscanidx = array('i',[0])
 tree.Branch('scanidx',tscanidx,'scanidx/I')
 
-tedmval = array('f',[0.])
-tree.Branch('edmval',tedmval,'edmval/F')
+tedmval = array('d',[0.])
+tree.Branch('edmval',tedmval,'edmval/D')
 
-tnllval = array('f',[0.])
-tree.Branch('nllval',tnllval,'nllval/F')
+tnllval = array('d',[0.])
+tree.Branch('nllval',tnllval,'nllval/D')
 
-tnllvalfull = array('f',[0.])
-tree.Branch('nllvalfull',tnllvalfull,'nllvalfull/F')
+tnllvalfull = array('d',[0.])
+tree.Branch('nllvalfull',tnllvalfull,'nllvalfull/D')
 
-tdnllval = array('f',[0.])
-tree.Branch('dnllval',tdnllval,'dnllval/F')
+tdnllval = array('d',[0.])
+tree.Branch('dnllval',tdnllval,'dnllval/D')
 
 tchisq = array('f',[0.])
 tree.Branch('chisq', tchisq, 'chisq/F')
